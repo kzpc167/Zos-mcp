@@ -1,0 +1,6 @@
+# Zos-mcp 运行依赖（MCP 服务器专用；CLI/LLM SDK 已移除）
+pywin32>=306              # ZOS-API COM 驱动
+mcp>=1.0.0,<2             # MCP 协议服务器（2.x 移除了本项目使用的 Server API，必须锁 1.x）
+python-dotenv>=1.0.0      # 读取 zemax_agent/.env 中的 Zemax 连接配置
+concurrent_log_handler    # 多进程安全的日志滚动
+psutil                    # 日志文件占用进程检测

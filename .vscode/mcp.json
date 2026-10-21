@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "zemax-opticstudio": {
+      "type": "stdio",
+      "command": "D:\\Zemax-mcp\\.venv\\Scripts\\python.exe",
+      "args": [
+        "D:\\Zemax-mcp\\mcp_server.py",
+        "--zemax-mode",
+        "extension",
+        "--instance",
+        "0"
+      ]
+    }
+  }
+}
