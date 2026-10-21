@@ -44,6 +44,8 @@ load_dotenv(_HERE / ".env")
 # ---------------------------------------------------------------------------
 
 _toolkit: ZemaxToolkit | None = None
+_zemax_mode: str = "extension"
+_instance: int = 0
 
 server = Server("zemax-opticstudio")
 server.version = "1.0.0"
@@ -83,6 +85,7 @@ async def list_tools() -> list[types.Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
     """接收工具调用请求，路由到 ZemaxToolkit 执行."""
+    global _toolkit
     if _toolkit is None:
         payload = json.dumps(
             {"error": "Zemax 连接尚未初始化。请确保以正确参数启动 MCP 服务器。"},
@@ -122,8 +125,33 @@ async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent
         result_str = _toolkit.dispatch(name, arguments or {})
         logger.debug(f"MCP 工具结果: {result_str[:300]}")
     except Exception as e:
-        logger.error(f"MCP 工具 {name} 异常: {e}", exc_info=True)
-        result_str = json.dumps({"error": str(e)}, ensure_ascii=False)
+        # 增强自愈：dispatch 抛 COM 异常时，可能是交互扩展被手动终止导致连接失效。
+        # 不再依赖 is_alive 判断（它可能假存活），直接重建整个 connection 对象并重试一次。
+        logger.error(f"MCP 工具 {name} 异常: {e}，尝试重建连接后重试", exc_info=True)
+        _log(f"工具 {name} 异常，重建 COM 连接后重试一次...")
+        try:
+            _toolkit.conn.disconnect()
+            _toolkit = _init_zemax_connection(_zemax_mode, _instance)
+            if _toolkit is not None and _toolkit.conn.is_alive:
+                result_str = _toolkit.dispatch(name, arguments or {})
+                _log("重建连接后重试成功")
+            else:
+                result_str = json.dumps(
+                    {
+                        "error": (
+                            f"工具 {name} 执行异常且自动重建连接失败: {e}。"
+                            "请确保 OpticStudio 运行中且 Interactive Extension 已激活，"
+                            "然后调用 reconnect_zemax。"
+                        )
+                    },
+                    ensure_ascii=False,
+                )
+        except Exception as re_e:
+            logger.error(f"重建连接失败: {re_e}", exc_info=True)
+            result_str = json.dumps(
+                {"error": f"工具 {name} 异常({e})，自动重连也失败({re_e})"},
+                ensure_ascii=False,
+            )
 
     return [types.TextContent(type="text", text=result_str)]
 
@@ -215,7 +243,9 @@ def _log(msg: str):
 # ---------------------------------------------------------------------------
 
 async def async_main(zemax_mode: str, instance: int):
-    global _toolkit
+    global _toolkit, _zemax_mode, _instance
+    _zemax_mode = zemax_mode
+    _instance = instance
     _toolkit = _init_zemax_connection(zemax_mode, instance)
     logger.info(f"MCP 服务器启动: zemax_mode={zemax_mode}, instance={instance}")
     _log("Zemax OpticStudio MCP 服务器已启动 (stdio transport)")

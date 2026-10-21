@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zemax MCP 工具链 · 项目总览</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1a1d24; --ink2:#5b6472; --ink3:#8b94a3;
+    --line:#e5e8ee; --accent:#2f6df6; --accent-soft:#eaf1ff;
+    --ok:#1f9d6b; --warn:#c97b12; --warn-soft:#fff6e6;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:20px 16px 56px;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+
+  /* Hero */
+  .hero{padding:8px 4px 22px}
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:28px;line-height:1.25;margin:8px 0 10px;letter-spacing:-.01em}
+  .lede{color:var(--ink2);margin:0;font-size:15px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .chip{
+    background:var(--accent-soft);color:#1b4fc4;border-radius:999px;
+    padding:5px 12px;font-size:13px;font-weight:600;
+  }
+  .chip.grey{background:#eef0f4;color:var(--ink2)}
+
+  /* Card */
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin:14px 0;
+  }
+  h2{font-size:17px;margin:0 0 12px;letter-spacing:-.005em}
+  h2 .num{
+    display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--accent);
+    color:#fff;font-size:12px;align-items:center;justify-content:center;margin-right:8px;
+    vertical-align:2px;
+  }
+  p{margin:0 0 10px}
+  p:last-child{margin-bottom:0}
+  .muted{color:var(--ink2);font-size:14px}
+
+  /* Flow */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .node{
+    border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:#fbfcfe;
+  }
+  .node b{display:block;font-size:14px}
+  .node span{font-size:12.5px;color:var(--ink2)}
+  .arrow{text-align:center;color:var(--ink3);font-size:15px;line-height:1.1;padding:4px 0}
+  .node.hl{border-color:#bcd2ff;background:var(--accent-soft)}
+
+  /* Steps */
+  ol.steps{margin:0;padding-left:0;list-style:none;counter-reset:s}
+  ol.steps li{
+    counter-increment:s;position:relative;padding-left:36px;margin-bottom:14px;font-size:14.5px;
+  }
+  ol.steps li:last-child{margin-bottom:0}
+  ol.steps li::before{
+    content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;
+    background:#eef2fb;color:#2b5fd0;font-size:12.5px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  code{
+    font-family:var(--mono);font-size:12.5px;background:#f1f3f7;border:1px solid #e6e9ef;
+    border-radius:5px;padding:1px 5px;color:#24405f;word-break:break-all;
+  }
+  pre{
+    background:#1e232e;color:#dfe4ec;border-radius:10px;padding:14px;overflow-x:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.6;margin:10px 0 0;
+  }
+  pre .c{color:#7c8798}
+
+  /* Table */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink3);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap;color:var(--ink2);font-weight:600}
+  .tools{font-family:var(--mono);font-size:12px;color:#2b4a6f;line-height:1.9;word-break:break-all}
+
+  /* Compare */
+  .cmp{display:grid;gap:12px}
+  @media(min-width:560px){.cmp{grid-template-columns:1fr 1fr}}
+  .cmp .box{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfcfe}
+  .cmp .box.win{border-color:#b7e4d0;background:#f4fcf8}
+  .cmp .box h3{margin:0 0 8px;font-size:14px}
+  .cmp .box h3 em{font-style:normal;font-size:11px;font-weight:700;color:var(--ok);background:#dff5e9;padding:2px 7px;border-radius:999px;margin-left:6px}
+  .kv{font-size:13px;color:var(--ink2);display:flex;justify-content:space-between;gap:10px;padding:3px 0}
+  .kv b{color:var(--ink);font-family:var(--mono);font-size:12.5px;font-weight:600}
+
+  /* Pitfalls */
+  .pit{display:flex;gap:10px;padding:11px 0;border-bottom:1px dashed var(--line);font-size:14px}
+  .pit:last-child{border-bottom:none;padding-bottom:0}
+  .pit .i{
+    flex:0 0 20px;height:20px;border-radius:5px;background:var(--warn-soft);color:var(--warn);
+    font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:2px;
+  }
+  .pit b{font-weight:600}
+  .pit span{display:block;color:var(--ink2);font-size:13px;margin-top:2px}
+
+  /* Files */
+  .files{font-family:var(--mono);font-size:12.5px;color:var(--ink2);line-height:2}
+  .files b{color:var(--ink);font-weight:600}
+
+  footer{text-align:center;color:var(--ink3);font-size:12px;margin-top:26px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Project Overview</div>
+    <h1>Zemax MCP 工具链</h1>
+    <p class="lede">用自然语言驱动 OpticStudio 做光学设计。把 ZOS-API 的操作封成 53 个 MCP 工具，任何支持 MCP 的客户端都能直接调。</p>
+    <div class="chips">
+      <span class="chip">53 个工具</span>
+      <span class="chip">ZOS-API / COM</span>
+      <span class="chip grey">Python 3.13</span>
+      <span class="chip grey">OpticStudio 2024 R1</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2><span class="num">1</span>它是怎么工作的</h2>
+    <p class="muted">服务器不启动 Zemax，只连接到「已经在运行的」OpticStudio 实例。所以改完镜头，屏幕上的界面会同步变化。</p>
+    <div class="flow">
+      <div class="node"><b>Agent 客户端</b><span>WorkBuddy / VS Code Copilot / Claude Desktop</span></div>
+      <div class="arrow">↓ stdio</div>
+      <div class="node hl"><b>mcp_server.py</b><span>声明 53 个工具、路由调用</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><b>tools.py</b><span>镜头编辑 / 优化 / 像质分析 / 导出的具体实现</span></div>
+      <div class="arrow">↓</div>
+      <div class="node"><b>OpticStudio</b><span>经 ZOS-API (COM) 读写当前打开的镜头</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">2</span>两种连接模式</h2>
+    <table>
+      <tr><th>模式</th><th>行为</th></tr>
+      <tr><td>extension</td><td>连已打开的 Zemax，需先点 <code>Programming → Interactive Extension</code>。边看界面边改，推荐。</td></tr>
+      <tr><td>standalone</td><td>Python 自己拉起一个隐形实例，不需要 GUI，但每次多花 15–20 秒。</td></tr>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">3</span>怎么接上</h2>
+    <ol class="steps">
+      <li>建 venv、装依赖：<code>pip install -r requirements.txt</code>（走阿里云镜像）</li>
+      <li>复制 <code>.env.example → .env</code>，设 <code>ZEMAX_MODE=extension</code></li>
+      <li>在客户端注册 MCP：命令填 <code>.venv/Scripts/python.exe</code>，参数填 <code>mcp_server.py --zemax-mode extension --instance 0</code></li>
+      <li>打开 OpticStudio，点 <code>Programming → Interactive Extension</code></li>
+      <li>开始对话：「读一下当前系统」「把第 3 面曲率改成 18.1」</li>
+    </ol>
+    <pre><span class="c"># 手动起服务器（一般由客户端自动拉起）</span>
+python mcp_server.py --zemax-mode extension --instance 0</pre>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">4</span>工具能做什么</h2>
+    <table>
+      <tr><td>会话</td><td class="tools">get_project_context · get_system_info · new_file · open_file · save_file · list_backups · reconnect_zemax · update_ui</td></tr>
+      <tr><td>镜头数据</td><td class="tools">insert_surface · remove_surface · edit_surface · set_surface_type · make_variable · set_aperture · set_fields · set_wavelengths</td></tr>
+      <tr><td>评价函数</td><td class="tools">add_operand · edit_operand · remove_operands · clear_operands · build_operand_block · get_operands · get_merit_function · get_merit_breakdown · set_default_merit_function(_after_current_block)</td></tr>
+      <tr><td>优化</td><td class="tools">run_optimization · quick_focus</td></tr>
+      <tr><td>像质</td><td class="tools">get_mtf · get_mtf_curve · get_fft_mtf_vs_field · get_spot_diagram_data · get_opd_fan_data · get_ray_fan_data · get_wavefront_map_data · get_image_quality · get_aberrations · get_distortion · get_field_curvature_distortion_data · 色差 / 照度 / 渐晕</td></tr>
+      <tr><td>材料与一阶</td><td class="tools">get_first_order_data · get_glass_catalogs · set_glass_catalogs · set_ray_aiming · get_ray_aiming_settings</td></tr>
+      <tr><td>交付</td><td class="tools">open_layout · export_analysis_data · generate_validation_report · check_manufacturability</td></tr>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">5</span>做出来的案例：双高斯物镜</h2>
+    <p class="muted">f′ = 100 mm，F/3，2ω = 28°，两轮迭代的对比：</p>
+    <div class="cmp">
+      <div class="box">
+        <h3>首版</h3>
+        <div class="kv"><span>优化变量</span><b>7 半径 + 离焦</b></div>
+        <div class="kv"><span>MF</span><b>0.181</b></div>
+        <div class="kv"><span>RSCE</span><b>≈0.13 mm</b></div>
+        <div class="kv"><span>AXCL</span><b>0.138</b></div>
+      </div>
+      <div class="box win">
+        <h3>改进版<em>更优</em></h3>
+        <div class="kv"><span>策略</span><b>约束 + 向导</b></div>
+        <div class="kv"><span>MF</span><b>0.00177</b></div>
+        <div class="kv"><span>EFFL</span><b>100.06 mm</b></div>
+        <div class="kv"><span>AXCL</span><b>0.002 mm</b></div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:12px">关键手法：先清空、手写 EFFL/AXCL/LACL 约束，再用 <code>set_default_merit_function_after_current_block</code> 追加点列图向导 —— 后者不被覆盖，前者也不会丢。</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">6</span>踩过的坑</h2>
+    <div class="pit"><div class="i">1</div><div><b>写完立刻读回是陈旧值</b><span>看起来像没生效，其实已经改了。要验证就新建连接读。</span></div></div>
+    <div class="pit"><div class="i">2</div><div><b><code>mcp</code> 包必须锁 1.x</b><span>项目用 <code>@server.list_tools()</code>，2.x 已移除该 API，requirements 里写死 <code>&lt;2</code>。</span></div></div>
+    <div class="pit"><div class="i">3</div><div><b>LDE 结构性操作有 COM 时序问题</b><span><code>InsertNewSurfaceAt</code> 后立刻写属性会错乱，优先用 <code>edit_surface</code>。</span></div></div>
+    <div class="pit"><div class="i">4</div><div><b>extension 槽位全废时别改代码</b><span>那是 .NET Remoting 注册状态烂了，重启电脑恢复；重启 Zemax 无效。</span></div></div>
+    <div class="pit"><div class="i">5</div><div><b><code>set_wavelengths</code> 会重置操作数波长引用</b><span>AXCL/LACL 的 (1,3) 会变 (1,1)，改完必须复查。</span></div></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">7</span>目录</h2>
+    <div class="files">
+      <b>mcp_server.py</b> — MCP 入口，工具声明与路由<br>
+      <b>tools.py</b> — 53 个工具实现 + JSON Schema<br>
+      <b>zemax_connection.py</b> — ZOS-API 连接与会话<br>
+      <b>logger.py</b> — 滚动日志，多进程安全<br>
+      <b>.github/skills/</b> — 光学设计技能包<br>
+      <b>zemax-ADAS/</b> — 双高斯设计文件
+    </div>
+  </section>
+
+  <footer>Zemax MCP 工具链 · 本地运行，不依赖任何云服务</footer>
+</div>
+</body>
+</html>
