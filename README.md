@@ -1,11 +1,11 @@
 # Zemax MCP 工具链
 
-用自然语言驱动 Ansys Zemax OpticStudio 做光学设计 —— 把 ZOS-API 的 53 个操作封装成 MCP 工具，任何支持 MCP 的 Agent 客户端（WorkBuddy / VS Code Copilot / Claude Desktop）都能直接调用。
+用自然语言驱动 Ansys Zemax OpticStudio 做光学设计 —— 将 60 个 Zemax 工具封装为 MCP 工具，另提供 1 个服务器重连工具，共向客户端提供 61 个工具。任何支持 MCP 的 Agent 客户端（WorkBuddy / VS Code Copilot / Claude Desktop）都能直接调用。
 
 ## 一句话架构
 
 ```
-Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py (53 个工具)  ──▶  ZOS-API (COM)  ──▶  OpticStudio
+Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py (60 个 Zemax 工具)  ──▶  ZOS-API (COM)  ──▶  OpticStudio
 ```
 
 服务器本身**不启动 Zemax**，它连接到正在运行的 OpticStudio 实例。
@@ -67,7 +67,7 @@ copy .env.example .env        # ZEMAX_MODE=extension, ZEMAX_INSTANCE=0
 
 ```
 mcp_server.py        MCP 协议入口（stdio，工具声明与路由）
-tools.py             53 个工具的实现 + JSON Schema
+tools.py             60 个 Zemax 工具的实现 + JSON Schema
 zemax_connection.py  ZOS-API 连接与会话管理
 logger.py            日志（滚动、多进程安全）
 .github/skills/      Zemax 技能真源（入库，Copilot 与队友读取）
@@ -93,8 +93,8 @@ python scripts/sync_skills.py --check  # 只检查漂移，有差异退出码 1
 ```
 
 - 项目级四个：`system-setup-by-type`、`zemax-ADAS-skill`、`zemax-optical-design`、`zemax-zoom-lens-design`
-- `lab-book-skill` 和 `neat-freak` 不属于本项目 Zemax 技能，不由该脚本同步到 `.dsh/skills/`
-- `.github/skills/lab-book-skill/` 是上游 `Wavesflow/lab-book-skill` 的克隆，不纳入本仓库提交或技能同步
+- `lab-book-skill` 和 `neat-freak` 是独立维护的外部技能，不属于本项目 Zemax 技能，不纳入本仓库提交，也不由该脚本同步到 `.dsh/skills/`
+- `.github/skills/lab-book-skill/` 和 `.github/skills/neat-freak/` 均由各自仓库单独维护
 
 ## 环境要求
 
