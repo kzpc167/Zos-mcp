@@ -113,6 +113,53 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "set_asphere_coefficients",
+            "description": (
+                "设置 EvenAsphere 表面的偶次非球面系数，按 A4、A6、A8……顺序传入；"
+                "设置后立即读回验证。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "surface_number": {
+                        "type": "integer",
+                        "description": "EvenAsphere 表面编号",
+                    },
+                    "coefficients": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 1,
+                        "description": "从 A4 开始连续排列的偶次系数，例如 [A4, A6, A8, A10, A12]",
+                    },
+                },
+                "required": ["surface_number", "coefficients"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_asphere_coefficients",
+            "description": "读取 EvenAsphere 表面的偶次非球面系数，按 A4、A6、A8……顺序返回。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "surface_number": {
+                        "type": "integer",
+                        "description": "EvenAsphere 表面编号",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "从 A4 开始读取的系数个数（默认 5）",
+                    },
+                },
+                "required": ["surface_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "remove_surface",
             "description": "删除指定编号的表面（不能删除物面和像面）",
             "parameters": {
@@ -155,7 +202,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "set_fields",
-            "description": "设置系统视场（会清除并替换所有现有视场点）",
+            "description": "设置系统视场及可选归一化方式（会清除并替换所有现有视场点）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -193,6 +240,11 @@ TOOL_DEFINITIONS = [
                         },
                         "description": "视场点列表",
                     },
+                    "normalization": {
+                        "type": "string",
+                        "enum": ["Radial", "Rectangular"],
+                        "description": "视场归一化方式",
+                    },
                 },
                 "required": ["field_type", "fields"],
             },
@@ -202,7 +254,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "set_wavelengths",
-            "description": "设置系统波长（会清除并替换所有现有波长）",
+            "description": "设置系统波长和可选主波长（会清除并替换所有现有波长）",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -229,6 +281,11 @@ TOOL_DEFINITIONS = [
                         "enum": ["d_light", "C_light", "F_light", "FdC_Visible"],
                         "description": "使用预设波长 (设置此项时忽略 wavelengths)",
                     },
+                    "primary_index": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "主波长序号（从 1 开始）",
+                    },
                 },
                 "required": [],
             },
@@ -238,7 +295,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "make_variable",
-            "description": "将指定表面的某个参数设为变量 (可优化) 或固定。param=material 时把玻璃设为替代玻璃(Substitute)变量，可用 catalog 指定搜索的玻璃库目录。",
+            "description": "将指定表面的某个参数设为变量 (可优化) 或固定。支持半径、厚度、圆锥系数和 Even Aspheric 的 A4/A6/A8/A10；param=material 时把玻璃设为替代玻璃(Substitute)变量。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -248,7 +305,7 @@ TOOL_DEFINITIONS = [
                     },
                     "param": {
                         "type": "string",
-                        "enum": ["radius", "thickness", "conic", "material"],
+                        "enum": ["radius", "thickness", "conic", "material", "A4", "A6", "A8", "A10"],
                         "description": "参数名称",
                     },
                     "catalog": {
@@ -487,7 +544,7 @@ TOOL_DEFINITIONS = [
                     },
                     "surface_type": {
                         "type": "string",
-                        "description": "表面类型名称，如 Standard, EvenAsphere, Paraxial, IdealLens 等",
+                        "description": "表面类型枚举名，如 Standard, EvenAspheric/EvenAsphere, Paraxial",
                     },
                 },
                 "required": ["surface_number", "surface_type"],
@@ -1580,19 +1637,38 @@ class ZemaxToolkit:
             f = sys_data.Fields.GetField(i)
             x, y, weight = self.conn.get_field_data(f)
             fields_info.append({"index": i, "x": x, "y": y, "weight": weight})
+        normalization_value = int(sys_data.Fields.Normalization)
+        normalization_name = {0: "Radial", 1: "Rectangular"}.get(
+            normalization_value, str(normalization_value)
+        )
 
         # 波长 (通过安全访问层读取)
         wavelengths_info = []
         for i in range(1, sys_data.Wavelengths.NumberOfWavelengths + 1):
             w = sys_data.Wavelengths.GetWavelength(i)
             value, weight = self.conn.get_wavelength_data(w)
-            wavelengths_info.append({"index": i, "value_um": value, "weight": weight})
+            wavelengths_info.append(
+                {
+                    "index": i,
+                    "value_um": value,
+                    "weight": weight,
+                    "is_primary": bool(w.IsPrimary),
+                }
+            )
 
         # 表面
         surfaces = []
         num_surf = lde.NumberOfSurfaces
         for i in range(num_surf):
             surf = lde.GetSurfaceAt(i)
+            solve_info = {
+                name: _safe(getattr(surf, attr), "Solve", None)
+                for name, attr in (
+                    ("radius", "RadiusCell"),
+                    ("thickness", "ThicknessCell"),
+                    ("conic", "ConicCell"),
+                )
+            }
             # 读取材料 solve 类型（用于验证替代玻璃等是否生效）
             material_solve = None
             try:
@@ -1601,14 +1677,38 @@ class ZemaxToolkit:
                 material_solve = _safe(sd, "Type", None)
             except Exception:
                 material_solve = None
+            asphere_solve = None
+            asphere_coefficients = None
+            if int(_safe(surf, "type", -1)) == int(
+                self.conn.constants.SurfaceType_EvenAspheric
+            ):
+                even_asphere = self._get_even_aspheric_surface(i)
+                asphere_coefficients = {
+                    f"A{order}": float(
+                        even_asphere.GetNthEvenOrderTerm(order)
+                    )
+                    for order in (4, 6, 8, 10, 12)
+                }
+                asphere_solve = {
+                    f"A{order}": _safe(
+                        even_asphere.NthEvenOrderTermCell(order),
+                        "Solve",
+                        None,
+                    )
+                    for order in (4, 6, 8, 10, 12)
+                }
             surfaces.append(
                 {
                     "number": i,
+                    "type": _safe(surf, "typeName", ""),
                     "comment": _safe(surf, "Comment", ""),
                     "radius": _safe(surf, "Radius", None),
                     "thickness": _safe(surf, "Thickness", None),
                     "material": _safe(surf, "Material", ""),
+                    "solve": solve_info,
                     "material_solve": material_solve,
+                    "asphere_coefficients": asphere_coefficients,
+                    "asphere_solve": asphere_solve,
                     "semi_diameter": _safe(surf, "SemiDiameter", None),
                     "conic": _safe(surf, "Conic", 0.0),
                     "is_stop": _safe(surf, "IsStop", False),
@@ -1618,6 +1718,7 @@ class ZemaxToolkit:
         info = {
             "num_surfaces": num_surf,
             "aperture": aperture_info,
+            "field_normalization": normalization_name,
             "fields": fields_info,
             "wavelengths": wavelengths_info,
             "surfaces": surfaces,
@@ -1695,18 +1796,122 @@ class ZemaxToolkit:
     def set_surface_type(self, surface_number: int, surface_type: str) -> str:
         lde = self.conn.lde
         surf = lde.GetSurfaceAt(surface_number)
-        # 尝试通过名称查找类型 (COM 属性名为 typeName, 注意大小写)
-        try:
-            type_settings = surf.GetSurfaceTypeSettings(surface_type)
-            surf.ChangeType(type_settings)
-        except Exception:
+        enum_name = "".join(surface_type.split())
+        enum_name = {
+            "EvenAsphere": "EvenAspheric",
+            "EvenAspheric": "EvenAspheric",
+        }.get(enum_name, enum_name)
+        surface_type_value = getattr(
+            self.conn.constants,
+            f"SurfaceType_{enum_name}",
+            None,
+        )
+        if surface_type_value is None:
             return json.dumps(
-                {"error": f"无法将面 {surface_number} 改为类型 '{surface_type}'，请检查类型名称"},
+                {"error": f"未知表面类型 '{surface_type}'"},
+                ensure_ascii=False,
+            )
+        type_settings = surf.GetSurfaceTypeSettings(surface_type_value)
+        if not surf.ChangeType(type_settings):
+            return json.dumps(
+                {"error": f"OpticStudio 未能将面 {surface_number} 改为类型 '{surface_type}'"},
                 ensure_ascii=False,
             )
         return json.dumps(
             {"ok": True, "message": f"面 {surface_number} 类型已改为 {surface_type}"},
             ensure_ascii=False,
+        )
+
+    def _get_even_aspheric_surface(self, surface_number: int):
+        from win32com.client import CastTo
+
+        surf = self.conn.lde.GetSurfaceAt(surface_number)
+        expected_type = self.conn.constants.SurfaceType_EvenAspheric
+        if int(surf.type) != int(expected_type):
+            raise ValueError(f"面 {surface_number} 不是 Even Aspheric 表面")
+        return CastTo(surf.SurfaceData, "ISurfaceNthEvenOrderTerms")
+
+    @staticmethod
+    def _format_asphere_coefficients(coefficients: list[float]) -> list[dict]:
+        return [
+            {"order": 2 * index + 2, "value": value}
+            for index, value in enumerate(coefficients, start=1)
+        ]
+
+    def get_asphere_coefficients(self, surface_number: int, count: int = 5) -> str:
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError("count 必须是大于 0 的整数")
+
+        surf = self._get_even_aspheric_surface(surface_number)
+        coefficients = [
+            float(surf.GetNthEvenOrderTerm(term_index))
+            for term_index in range(4, 4 + 2 * count, 2)
+        ]
+        return json.dumps(
+            {
+                "surface_number": surface_number,
+                "coefficients": self._format_asphere_coefficients(coefficients),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def set_asphere_coefficients(self, surface_number: int, coefficients: list) -> str:
+        if not isinstance(coefficients, list) or not coefficients:
+            raise ValueError("coefficients 必须是从 A4 开始的非空数值列表")
+
+        values = []
+        for value in coefficients:
+            if isinstance(value, bool):
+                raise ValueError("非球面系数必须是有限数值")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("非球面系数必须是有限数值") from exc
+            if not math.isfinite(number):
+                raise ValueError("非球面系数必须是有限数值")
+            values.append(number)
+
+        surf = self._get_even_aspheric_surface(surface_number)
+        term_indices = range(4, 4 + 2 * len(values), 2)
+        previous = [float(surf.GetNthEvenOrderTerm(n)) for n in term_indices]
+        try:
+            for term_index, value in zip(term_indices, values):
+                surf.SetNthEvenOrderTerm(term_index, value)
+
+            readback = [
+                float(surf.GetNthEvenOrderTerm(term_index))
+                for term_index in term_indices
+            ]
+            if any(
+                not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-15)
+                for actual, expected in zip(readback, values)
+            ):
+                raise RuntimeError(
+                    f"非球面系数读回与目标不一致：目标={values}，读回={readback}"
+                )
+        except Exception as exc:
+            rollback_errors = []
+            for term_index, value in zip(term_indices, previous):
+                try:
+                    surf.SetNthEvenOrderTerm(term_index, value)
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"A{term_index}: {rollback_exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"写入非球面系数失败（{exc}），且回滚失败："
+                    + "; ".join(rollback_errors)
+                ) from exc
+            raise
+
+        return json.dumps(
+            {
+                "ok": True,
+                "surface_number": surface_number,
+                "coefficients": self._format_asphere_coefficients(readback),
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
     # ---- 光圈 ----
@@ -1728,7 +1933,7 @@ class ZemaxToolkit:
         )
 
     # ---- 视场 ----
-    def set_fields(self, field_type: str, fields: list) -> str:
+    def set_fields(self, field_type: str, fields: list, normalization: str = None) -> str:
         field_type_map = {
             "Angle": 0,
             "ObjectHeight": 1,
@@ -1737,6 +1942,14 @@ class ZemaxToolkit:
         }
         sys_data = self.conn.system_data
         flds = sys_data.Fields
+        normalization_map = {"Radial": 0, "Rectangular": 1}
+        if normalization is not None:
+            if normalization not in normalization_map:
+                return json.dumps(
+                    {"error": f"不支持的视场归一化方式: {normalization}"},
+                    ensure_ascii=False,
+                )
+            flds.Normalization = normalization_map[normalization]
 
         # 设置视场类型
         type_val = field_type_map.get(field_type, 0)
@@ -1771,14 +1984,28 @@ class ZemaxToolkit:
                 "vcx": _safe(ff, "VCX", None),
                 "vcy": _safe(ff, "VCY", None),
             })
+        normalization_readback = {
+            value: name for name, value in normalization_map.items()
+        }.get(int(flds.Normalization), str(flds.Normalization))
 
         return json.dumps(
-            {"ok": True, "field_type": field_type, "count": len(fields), "readback": readback},
+            {
+                "ok": True,
+                "field_type": field_type,
+                "field_normalization": normalization_readback,
+                "count": len(fields),
+                "readback": readback,
+            },
             ensure_ascii=False,
         )
 
     # ---- 波长 ----
-    def set_wavelengths(self, wavelengths: list = None, preset: str = None) -> str:
+    def set_wavelengths(
+        self,
+        wavelengths: list = None,
+        preset: str = None,
+        primary_index: int = None,
+    ) -> str:
         sys_data = self.conn.system_data
         wls = sys_data.Wavelengths
 
@@ -1794,26 +2021,51 @@ class ZemaxToolkit:
                 wls.SelectWavelengthPreset(val)
             except Exception as e:
                 return json.dumps({"error": f"预设波长设置失败: {e}"}, ensure_ascii=False)
-            return json.dumps({"ok": True, "preset": preset}, ensure_ascii=False)
+        else:
+            if not wavelengths:
+                return json.dumps({"error": "需要提供 wavelengths 或 preset"}, ensure_ascii=False)
 
-        if not wavelengths:
-            return json.dumps({"error": "需要提供 wavelengths 或 preset"}, ensure_ascii=False)
+            # 清除现有波长
+            while wls.NumberOfWavelengths > 1:
+                wls.RemoveWavelength(wls.NumberOfWavelengths)
 
-        # 清除现有波长
-        while wls.NumberOfWavelengths > 1:
-            wls.RemoveWavelength(wls.NumberOfWavelengths)
+            # 设置第一个波长 (通过安全访问层)
+            w0 = wavelengths[0]
+            first = wls.GetWavelength(1)
+            self.conn.set_wavelength_data(first, value=w0["value"], weight=w0.get("weight", 1.0))
 
-        # 设置第一个波长 (通过安全访问层)
-        w0 = wavelengths[0]
-        first = wls.GetWavelength(1)
-        self.conn.set_wavelength_data(first, value=w0["value"], weight=w0.get("weight", 1.0))
+            # 添加其余波长
+            for w in wavelengths[1:]:
+                wls.AddWavelength(w["value"], w.get("weight", 1.0))
 
-        # 添加其余波长
-        for w in wavelengths[1:]:
-            wls.AddWavelength(w["value"], w.get("weight", 1.0))
+        if primary_index is not None:
+            if (
+                isinstance(primary_index, bool)
+                or not isinstance(primary_index, int)
+                or not 1 <= primary_index <= wls.NumberOfWavelengths
+            ):
+                return json.dumps(
+                    {"error": f"主波长序号必须在 1 到 {wls.NumberOfWavelengths} 之间"},
+                    ensure_ascii=False,
+                )
+            wls.GetWavelength(primary_index).MakePrimary()
+
+        primary_readback = next(
+            (
+                index
+                for index in range(1, wls.NumberOfWavelengths + 1)
+                if wls.GetWavelength(index).IsPrimary
+            ),
+            None,
+        )
 
         return json.dumps(
-            {"ok": True, "count": len(wavelengths)},
+            {
+                "ok": True,
+                "count": wls.NumberOfWavelengths,
+                "primary_index": primary_readback,
+                **({"preset": preset} if preset else {}),
+            },
             ensure_ascii=False,
         )
 
@@ -1940,6 +2192,8 @@ class ZemaxToolkit:
     def make_variable(self, surface_number: int, param: str, variable: bool, catalog: str = None) -> str:
         lde = self.conn.lde
         surf = lde.GetSurfaceAt(surface_number)
+        param_name = param.upper()
+        asphere_order = {"A4": 4, "A6": 6, "A8": 8, "A10": 10}
 
         cell_map = {
             "radius": "RadiusCell",
@@ -1947,13 +2201,22 @@ class ZemaxToolkit:
             "conic": "ConicCell",
             "material": "MaterialCell",
         }
-        cell_attr = cell_map.get(param)
-        if not cell_attr:
+        cell_attr = cell_map.get(param.lower())
+        if cell_attr:
+            cell = getattr(surf, cell_attr)
+        elif param_name in asphere_order:
+            try:
+                aspheric_surface = self._get_even_aspheric_surface(surface_number)
+                cell = aspheric_surface.NthEvenOrderTermCell(asphere_order[param_name])
+            except Exception as exc:
+                return json.dumps(
+                    {"error": f"无法访问面 {surface_number} 的 {param_name} 系数单元格: {exc}"},
+                    ensure_ascii=False,
+                )
+        else:
             return json.dumps({"error": f"不支持的参数: {param}"}, ensure_ascii=False)
 
-        cell = getattr(surf, cell_attr)
-
-        if param == "material":
+        if param.lower() == "material":
             # 玻璃：variable=true 表示设为"替代玻璃"(Substitute solve)，让优化器在玻璃库中自动搜索更优玻璃。
             if variable:
                 try:
@@ -1986,7 +2249,7 @@ class ZemaxToolkit:
                 status = "固定"
 
         return json.dumps(
-            {"ok": True, "message": f"面 {surface_number} 的 {param} 已设为{status}"},
+            {"ok": True, "message": f"面 {surface_number} 的 {param_name} 已设为{status}"},
             ensure_ascii=False,
         )
 
@@ -2042,19 +2305,23 @@ class ZemaxToolkit:
         else:
             _safe_set_attr(opt, "Algorithm", 0)  # DampedLeastSquares
 
+        # OptimizationCycles is an enum, not a count: Infinite=5 and
+        # Fixed_5_Cycles=2 in the ZOS-API.
         cycles_map = {
             "Automatic": 0,
             "Fixed_1": 1,
-            "Fixed_5": 5,
-            "Fixed_10": 10,
-            "Fixed_50": 50,
+            "Fixed_5": 2,
+            "Fixed_10": 3,
+            "Fixed_50": 4,
         }
-        cycle_val = cycles_map.get(cycles, 0)
-        if cycle_val == 0:
-            _safe_set_attr(opt, "Cycles", -1)  # Automatic
-        else:
-            if not _safe_set_attr(opt, "NumberOfCycles", cycle_val):
-                _safe_set_attr(opt, "Cycles", cycle_val)
+        cycle_val = cycles_map.get(cycles)
+        if cycle_val is None or not _safe_set_attr(opt, "Cycles", cycle_val):
+            tool_base = _cast_to_system_tool(opt)
+            tool_base.Close()
+            return json.dumps(
+                {"error": f"无法将优化循环数设置为 {cycles}"},
+                ensure_ascii=False,
+            )
 
         # RunAndWaitForCompletion / Close 在基类 ISystemTool 上
         # 参考 PyZOS inheritance_dict: ILocalOptimization -> ISystemTool
@@ -7424,6 +7691,7 @@ def _try_set_and_verify(target, prop: str, value):
 # 只读工具集 — 不触发自动 UI 刷新
 _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_system_info",
+    "get_asphere_coefficients",
     "get_project_context",
     "list_backups",
     "get_merit_function",
@@ -7459,6 +7727,7 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
 # 高风险工具集 — 执行前自动备份当前 .zmx，返回 backup_path 供 Agent 自主恢复
 _HIGH_RISK_TOOLS: frozenset[str] = frozenset({
     "run_optimization",
+    "set_asphere_coefficients",
     "new_file",
     "open_file",
     "edit_operand",
