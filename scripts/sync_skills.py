@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""把 .workbuddy/skills 发布到宿主的两个技能目录。
+"""把项目内的 Zemax 技能从 .github/skills 同步到 .dsh/skills。
 
-真源：  .workbuddy/skills/<name>/      本机训练与编辑现场（.workbuddy/ 被 .gitignore 排除）
-发布：  .github/skills/<name>/        入库副本，Copilot 与队友读取
-        .dsh/skills/<name>/          DSH 项目级技能根（rank 100），由本脚本生成
+真源：  .github/skills/<name>/       入库技能源，Copilot 与队友读取
+发布：  .dsh/skills/<name>/          DSH 项目级技能副本（rank 100）
 
 用法：
     python scripts/sync_skills.py           # 应用同步
     python scripts/sync_skills.py --check   # 只检查漂移，有差异时退出码 1
 
 注意：
-  - lab-book-skill 在 .github 下是 Wavesflow/lab-book-skill 的外部克隆，不参与发布。
+  - 仅同步本项目的 Zemax 技能；lab-book-skill 与 neat-freak 不参与发布。
   - 同步是“镜像”语义：目标目录里源端没有的文件会被删除。
 """
 
@@ -23,18 +22,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / ".workbuddy" / "skills"
+SRC = ROOT / ".github" / "skills"
 
-# 进入 .github/skills 的 skill（lab-book-skill 是外部克隆，另行维护）
-GITHUB_TARGETS = (
-    "neat-freak",
-    "system-setup-by-type",
-    "zemax-ADAS-skill",
-    "zemax-optical-design",
-    "zemax-zoom-lens-design",
-)
-
-# 声明为“本项目”的 skill，进入 DSH 项目级目录；通用技能留在 ~/.dsh/skills 全局层
+# 本项目的 Zemax 技能进入 DSH 项目级目录；其他技能不参与同步。
 DSH_TARGETS = (
     "system-setup-by-type",
     "zemax-ADAS-skill",
@@ -42,10 +32,7 @@ DSH_TARGETS = (
     "zemax-zoom-lens-design",
 )
 
-TARGETS = (
-    (ROOT / ".github" / "skills", GITHUB_TARGETS),
-    (ROOT / ".dsh" / "skills", DSH_TARGETS),
-)
+TARGETS = ((ROOT / ".dsh" / "skills", DSH_TARGETS),)
 
 
 def iter_files(base: Path) -> dict[str, Path]:
@@ -84,12 +71,12 @@ def apply(src: Path, dst: Path, add: list[str], update: list[str], remove: list[
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="同步 .workbuddy/skills 到 .github/skills 与 .dsh/skills")
+    ap = argparse.ArgumentParser(description="同步 .github/skills 中的 Zemax 技能到 .dsh/skills")
     ap.add_argument("--check", action="store_true", help="只检查漂移，不写文件")
     args = ap.parse_args()
 
     if not SRC.is_dir():
-        print(f"[错误] 找不到真源目录：{SRC}", file=sys.stderr)
+        print(f"[错误] 找不到项目技能目录：{SRC}", file=sys.stderr)
         return 2
 
     drift = 0
@@ -98,7 +85,7 @@ def main() -> int:
         for name in names:
             src = SRC / name
             if not src.is_dir():
-                print(f"  [错误] 真源缺少 {name}：{src}", file=sys.stderr)
+                print(f"  [错误] 项目技能缺少 {name}：{src}", file=sys.stderr)
                 return 2
             dst = base / name
             add, update, remove = plan(src, dst)

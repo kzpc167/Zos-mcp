@@ -19,8 +19,12 @@ logs/
 # ---- Agent 本地记忆 ----
 .workbuddy/
 
-# DSH 项目级技能副本（由 scripts/sync_skills.py 从 .workbuddy/skills 生成）
-.dsh/skills/
+# DSH 项目级 Zemax 技能副本（由 scripts/sync_skills.py 从 .github/skills 生成）
+.dsh/skills/*
+!.dsh/skills/system-setup-by-type/
+!.dsh/skills/zemax-ADAS-skill/
+!.dsh/skills/zemax-optical-design/
+!.dsh/skills/zemax-zoom-lens-design/
 
 # ---- 编辑器/系统 ----
 .DS_Store

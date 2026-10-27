@@ -70,31 +70,31 @@ mcp_server.py        MCP 协议入口（stdio，工具声明与路由）
 tools.py             53 个工具的实现 + JSON Schema
 zemax_connection.py  ZOS-API 连接与会话管理
 logger.py            日志（滚动、多进程安全）
-.workbuddy/skills/   技能真源（本机训练/编辑，不入库）
-.github/skills/      入库技能副本（Copilot 与队友读取）
-.dsh/skills/         DSH 项目级技能（由 sync_skills.py 生成，不入库）
+.github/skills/      Zemax 技能真源（入库，Copilot 与队友读取）
+.dsh/skills/         DSH 项目级 Zemax 技能副本（由 sync_skills.py 生成并入库）
+.workbuddy/skills/   WorkBuddy 本机技能目录（不是真源，不入库）
 scripts/             技能同步与 WorkBuddy 重启脚本
 zemax-ADAS/          设计案例文件
 ```
 
 ## 技能（skills）
 
-`.workbuddy/skills/` 是本机训练与编辑的唯一真源，两个宿主目录由脚本镜像：
+`.github/skills/` 是项目 Zemax 技能的真源，供 Copilot 和队友使用；`.dsh/skills/` 是同步给 DSH 的入库副本。`.workbuddy/skills/` 只是本机 WorkBuddy 使用的目录，不是真源。
 
 | 目标 | 谁读 | 入库 |
 |---|---|---|
-| `.github/skills/` | VS Code Copilot、队友 | 是 |
-| `.dsh/skills/` | DSH 项目级（rank 100，优先于全局） | 否（生成物） |
+| `.github/skills/` | VS Code Copilot、队友；项目 Zemax 技能真源 | 是 |
+| `.dsh/skills/` | DSH 项目级（rank 100，优先于全局）；由脚本从 `.github/skills/` 同步 | 是 |
 | `~/.dsh/skills/` | DSH 全局（通用技能） | 否 |
 
 ```bash
-python scripts/sync_skills.py          # 应用同步
+python scripts/sync_skills.py          # 从 .github/skills 同步 Zemax 技能到 .dsh/skills
 python scripts/sync_skills.py --check  # 只检查漂移，有差异退出码 1
 ```
 
 - 项目级四个：`system-setup-by-type`、`zemax-ADAS-skill`、`zemax-optical-design`、`zemax-zoom-lens-design`
-- 通用两个 `lab-book-skill`、`neat-freak` 留在全局 `~/.dsh/skills`，内容同样由脚本对齐
-- `.github/skills/lab-book-skill/` 是上游 `Wavesflow/lab-book-skill` 的克隆，不参与同步
+- `lab-book-skill` 和 `neat-freak` 不属于本项目 Zemax 技能，不由该脚本同步到 `.dsh/skills/`
+- `.github/skills/lab-book-skill/` 是上游 `Wavesflow/lab-book-skill` 的克隆，不纳入本仓库提交或技能同步
 
 ## 环境要求
 
