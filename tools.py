@@ -4,6 +4,7 @@ import json
 import math
 import shutil
 import struct
+import time
 import traceback
 import zlib
 from datetime import datetime
@@ -12,8 +13,21 @@ from pathlib import Path
 from zemax_connection import ZemaxConnection
 from logger import logger
 
-_WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+# 仓库根 = tools.py 所在目录；此前写成 parent.parent，会退到 D:\ 并导致 rglob 全盘扫描
+_WORKSPACE_ROOT = Path(__file__).resolve().parent
 _IGNORED_PROJECT_DIRS = {".git", ".venv", "__pycache__", "backups", "build", "layouts", "logs"}
+
+# 元件序号圈码（check_interference 等报告里用）
+_CIRCLED = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤", 6: "⑥",
+            7: "⑦", 8: "⑧", 9: "⑨", 10: "⑩", 11: "⑪", 12: "⑫"}
+
+
+def _short_name(name: str) -> str:
+    """把 '元件②' → '②'、'光阑(STOP)' → 'STOP'，用于图上紧凑标注。"""
+    s = str(name or "")
+    if "STOP" in s or "光阑" in s:
+        return "STOP"
+    return s.replace("元件", "").strip() or s
 
 # ---------------------------------------------------------------------------
 #  MCP 工具模式定义（JSON Schema，沿用 OpenAI function-calling 格式）
@@ -166,6 +180,14 @@ TOOL_DEFINITIONS = [
                                     "type": "number",
                                     "description": "权重 (默认 1.0)",
                                 },
+                                "vcx": {
+                                    "type": "number",
+                                    "description": "X 方向渐晕压缩因子 (0~1)，1=无渐晕；0.3 表示拦掉 70% 边缘光线",
+                                },
+                                "vcy": {
+                                    "type": "number",
+                                    "description": "Y 方向渐晕压缩因子 (0~1)，1=无渐晕；0.45 表示拦掉 55% 边缘光线",
+                                },
                             },
                             "required": ["x", "y"],
                         },
@@ -216,7 +238,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "make_variable",
-            "description": "将指定表面的某个参数设为变量 (可优化) 或固定",
+            "description": "将指定表面的某个参数设为变量 (可优化) 或固定。param=material 时把玻璃设为替代玻璃(Substitute)变量，可用 catalog 指定搜索的玻璃库目录。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -226,8 +248,12 @@ TOOL_DEFINITIONS = [
                     },
                     "param": {
                         "type": "string",
-                        "enum": ["radius", "thickness", "conic"],
+                        "enum": ["radius", "thickness", "conic", "material"],
                         "description": "参数名称",
+                    },
+                    "catalog": {
+                        "type": "string",
+                        "description": "仅 param=material 时使用：替代玻璃搜索的玻璃库目录名(如 SCHOTT/CDGM/OHARA)。不提供则用系统当前已加载目录。",
                     },
                     "variable": {
                         "type": "boolean",
@@ -241,15 +267,72 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "set_model_glass",
+            "description": (
+                "把某面的玻璃替换为『模型玻璃(Model Glass)』，可选把折射率 nd / 阿贝数 vd / 偏色散 dPgF 设为优化变量。"
+                "对应教材里『将透镜材料改为模型玻璃并增加为变量』这一步。不传 index/abbe 时沿用当前玻璃的 nd/vd。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "surface_number": {"type": "integer", "description": "表面编号"},
+                    "index": {"type": "number", "description": "模型玻璃折射率 nd（不填则用当前玻璃值）"},
+                    "abbe": {"type": "number", "description": "模型玻璃阿贝数 vd（不填则用当前玻璃值）"},
+                    "vary_index": {"type": "boolean", "description": "nd 是否作为变量 (默认 true)"},
+                    "vary_abbe": {"type": "boolean", "description": "vd 是否作为变量 (默认 true)"},
+                    "dpgf": {"type": "number", "description": "偏色散 dPgF（可选）"},
+                    "vary_dpgf": {"type": "boolean", "description": "dPgF 是否作为变量 (默认 false)"},
+                },
+                "required": ["surface_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_solve",
+            "description": (
+                "设置表面单元格的 Solve。solve_type=marginal_ray_height 表示'边缘光线高度'求解"
+                "（教材里令像平面自动定位、使轴上边缘光线交高为零：height=0, pupil_zone=0）；"
+                "也支持 fixed / variable。param 指定作用在 radius/thickness/conic 上。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "surface_number": {"type": "integer", "description": "表面编号"},
+                    "solve_type": {
+                        "type": "string",
+                        "enum": ["marginal_ray_height", "fixed", "variable"],
+                        "description": "solve 类型 (默认 marginal_ray_height)",
+                    },
+                    "param": {
+                        "type": "string",
+                        "enum": ["radius", "thickness", "conic"],
+                        "description": "作用位置 (默认 thickness)",
+                    },
+                    "height": {"type": "number", "description": "边缘光线高度目标 (默认 0)"},
+                    "pupil_zone": {"type": "number", "description": "光瞳带 (默认 0 = 边缘光线)"},
+                },
+                "required": ["surface_number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_optimization",
-            "description": "运行局部优化（阻尼最小二乘法 DLS 或正交下降 OD）",
+            "description": "运行优化（DLS=阻尼最小二乘, OD=正交下降, Hammer=锤优化/全局搜索，用于替代玻璃和全局寻优）。Hammer 是持续运行型优化，用 duration_seconds 控制运行时长。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "algorithm": {
                         "type": "string",
-                        "enum": ["DLS", "OD"],
-                        "description": "DLS=阻尼最小二乘, OD=正交下降 (默认 DLS)",
+                        "enum": ["DLS", "OD", "Hammer"],
+                        "description": "DLS=阻尼最小二乘, OD=正交下降, Hammer=锤优化(替代玻璃/全局搜索) (默认 DLS)",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "description": "仅 Hammer 使用：持续运行时长(秒)。Hammer 是持续搜索型优化，值越大搜索越充分(默认 30)。",
                     },
                     "cycles": {
                         "type": "string",
@@ -263,6 +346,42 @@ TOOL_DEFINITIONS = [
                         "description": "循环次数 (默认 Automatic)",
                     },
                 },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_hammer",
+            "description": "启动 Hammer 锤优化并持续运行（界面保持打开、不关闭）。返回初始评价函数值。之后可用 get_hammer_status 定期读 MF、stop_hammer 停止。用于替代玻璃/全局寻优的长时间持续优化。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_hammer_status",
+            "description": "读取 Hammer 当前评价函数值（不停止、不关闭界面）。返回当前 MF、起始 MF 和下降量。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_hammer",
+            "description": "停止 Hammer 优化并关闭界面。返回起始 MF、最终 MF 和总下降量。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": [],
             },
         },
@@ -745,6 +864,109 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "export_layout_image",
+            "description": (
+                "把当前布局图导出为真实位图（PNG），返回可直接查看的图片路径。"
+                "走 system.Tools.Layouts 的图形导出接口（Open3DViewerExport / OpenCrossSectionExport），"
+                "按官方用法设置 OutputFilename/像素尺寸后必须 RunAndWaitForCompletion 才会真正渲染写盘。"
+                "3D 默认用 CameraViewpointAngleX/Y/Z = 0/0/0 的标准视角（与 Zemax GUI 一致），"
+                "返回值里的 camera.readback_deg 是实际生效的角度，可直接核对。"
+                "用于让 Agent 与用户都能看到结构图，检查元件干涉、光线是否合理等。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "layout_type": {
+                        "type": "string",
+                        "enum": ["2D", "3D"],
+                        "description": "2D=横截面布局, 3D=三维布局 (默认 3D)",
+                    },
+                    "width": {
+                        "type": "integer",
+                        "description": "输出像素宽 (默认 1600)",
+                    },
+                    "height": {
+                        "type": "integer",
+                        "description": "输出像素高 (默认 1000)",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "可选：指定输出路径(.png)。不提供则存到当前工程 layouts/ 目录",
+                    },
+                    "hide_lens_edges": {
+                        "type": "boolean",
+                        "description": "3D 布局是否隐藏透镜边缘/X 条（默认 true，出图更干净，只看面形与光线）",
+                    },
+                    "view": {
+                        "type": "string",
+                        "enum": ["current", "isometric", "xy", "yz", "xz"],
+                        "description": (
+                            "3D 相机视角。current（默认）= 不调预设，改用下面的 angle_x/y/z 角度，"
+                            "默认角度 0/0/0 即 Zemax 3D 布局的标准视角（与 GUI 一致）；"
+                            "isometric=正等轴测预设（有立体感，但角度非 0）；xy/yz/xz=三视图预设。"
+                        ),
+                    },
+                    "angle_x": {
+                        "type": "number",
+                        "description": "3D 相机绕 X 轴旋转角度（度），仅 view=current 时生效，默认 0",
+                    },
+                    "angle_y": {
+                        "type": "number",
+                        "description": "3D 相机绕 Y 轴旋转角度（度），仅 view=current 时生效，默认 0",
+                    },
+                    "angle_z": {
+                        "type": "number",
+                        "description": "3D 相机绕 Z 轴旋转角度（度），仅 view=current 时生效，默认 0",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_interference",
+            "description": (
+                "检查所有相邻实体（透镜元件之间、透镜与光阑之间）在边缘处是否实体相交。"
+                "按 z_edge = z_vertex + sag(半口径, R) 计算边缘净空，负值表示已经插在一起。"
+                "**这是 check_manufacturability 的盲区**（后者只看单个元件的边厚/弯曲因子，不看实体之间）。"
+                "每轮优化后必跑，尤其当布局图上看不清光阑与透镜是否贴合时——用数值代替肉眼。"
+                "默认同时生成几何示意图（不依赖位图像素标定，按 LDE 数据确定性复现）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min_clearance": {
+                        "type": "number",
+                        "description": (
+                            "透镜元件之间判定为 pass 的最小净空 (mm，默认 0.1)；"
+                            "小于此值报 warn，小于 0 报 fail。设计里 0.2~0.25mm 的空气层是正常的，所以默认值不宜放大"
+                        ),
+                    },
+                    "stop_clearance": {
+                        "type": "number",
+                        "description": (
+                            "透镜与光阑之间判定为 pass 的最小净空 (mm，默认 2.0)。"
+                            "光阑座需要装配空间；1mm 在布局图上几乎看不出，会被误判为重叠"
+                        ),
+                    },
+                    "save_image": {
+                        "type": "boolean",
+                        "description": "是否生成净空剖面示意图（默认 true，存为 layouts/_clearance_check.png）",
+                    },
+                    "image_path": {
+                        "type": "string",
+                        "description": "可选：示意图输出路径(.png)，不提供则存到 layouts/_clearance_check.png",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_image_quality",
             "description": (
                 "获取当前系统各视场的成像质量定量指标：RMS 弥散斑半径 (μm)、RMS 波前误差 (waves)，"
@@ -950,6 +1172,26 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "export_spot_diagram_image",
+            "description": (
+                "把点列图（Standard Spot）保存为 PNG 图片，固定文件名 layouts/spot_diagram.png（覆盖旧图），"
+                "默认叠加艾里斑参考圆（Airy Disk，按 1.22·λ·F# 计算）。"
+                "ZOS-API 的分析类没有位图导出接口，因此按真实光线落点渲染，数值与 Zemax 一致。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "show_airy": {"type": "boolean", "description": "是否绘制艾里斑参考圆，默认 true"},
+                    "wave": {"type": "integer", "description": "波长编号；0 = 全部 (默认)"},
+                    "file_path": {"type": "string", "description": "可选：自定义输出路径(.png)，默认 layouts/spot_diagram.png"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_fft_mtf_vs_field",
             "description": "通过 FFT MTF vs Field Analysis 获取指定频率随视场变化的 MTF 曲线，替代不稳定的临时 MFE MTF 采样。",
             "parameters": {
@@ -1096,6 +1338,10 @@ class ZemaxToolkit:
     def __init__(self, conn: ZemaxConnection):
         self.conn = conn
         self._last_backup_info = None
+        # Hammer 持续运行的持久状态（跨工具调用保持）
+        self._hammer_opt = None
+        self._hammer_tool_base = None
+        self._hammer_start_mf = None
 
     # ---- 分发 (带自动重连) ----
     def dispatch(self, tool_name: str, arguments: dict) -> str:
@@ -1347,6 +1593,14 @@ class ZemaxToolkit:
         num_surf = lde.NumberOfSurfaces
         for i in range(num_surf):
             surf = lde.GetSurfaceAt(i)
+            # 读取材料 solve 类型（用于验证替代玻璃等是否生效）
+            material_solve = None
+            try:
+                mc = surf.MaterialCell
+                sd = mc.GetSolveData()
+                material_solve = _safe(sd, "Type", None)
+            except Exception:
+                material_solve = None
             surfaces.append(
                 {
                     "number": i,
@@ -1354,6 +1608,7 @@ class ZemaxToolkit:
                     "radius": _safe(surf, "Radius", None),
                     "thickness": _safe(surf, "Thickness", None),
                     "material": _safe(surf, "Material", ""),
+                    "material_solve": material_solve,
                     "semi_diameter": _safe(surf, "SemiDiameter", None),
                     "conic": _safe(surf, "Conic", 0.0),
                     "is_stop": _safe(surf, "IsStop", False),
@@ -1381,8 +1636,20 @@ class ZemaxToolkit:
         changed = []
 
         if "radius" in kwargs and kwargs["radius"] is not None:
-            surf.Radius = float(kwargs["radius"])
-            changed.append(f"radius={kwargs['radius']}")
+            raw = kwargs["radius"]
+            if isinstance(raw, str):
+                token = raw.strip().lower()
+                if token in ("infinity", "infinite", "inf", "∞", "平面", "flat"):
+                    rval = float("inf")
+                else:
+                    rval = float(raw)
+            else:
+                rval = float(raw)
+                # ≥1e15 视为平面：写真正的 Infinity，而不是留一个巨大数值
+                if abs(rval) >= 1e15:
+                    rval = float("inf")
+            surf.Radius = rval
+            changed.append("radius=Infinity" if rval == float("inf") else f"radius={kwargs['radius']}")
 
         if "thickness" in kwargs and kwargs["thickness"] is not None:
             surf.Thickness = float(kwargs["thickness"])
@@ -1487,13 +1754,26 @@ class ZemaxToolkit:
             f0 = fields[0]
             first = flds.GetField(1)
             self.conn.set_field_data(first, x=f0.get("x", 0.0), y=f0.get("y", 0.0), weight=f0.get("weight", 1.0))
+            _set_field_vignetting(first, f0.get("vcx"), f0.get("vcy"))
 
         # 添加其余视场
         for f in fields[1:]:
             flds.AddField(f.get("x", 0.0), f.get("y", 0.0), f.get("weight", 1.0))
+            added = flds.GetField(flds.NumberOfFields)
+            _set_field_vignetting(added, f.get("vcx"), f.get("vcy"))
+
+        # 读回实际写入的 VCX/VCY 供验证
+        readback = []
+        for i in range(1, flds.NumberOfFields + 1):
+            ff = flds.GetField(i)
+            readback.append({
+                "y": _safe(ff, "Y", None),
+                "vcx": _safe(ff, "VCX", None),
+                "vcy": _safe(ff, "VCY", None),
+            })
 
         return json.dumps(
-            {"ok": True, "field_type": field_type, "count": len(fields)},
+            {"ok": True, "field_type": field_type, "count": len(fields), "readback": readback},
             ensure_ascii=False,
         )
 
@@ -1538,7 +1818,126 @@ class ZemaxToolkit:
         )
 
     # ---- 变量 ----
-    def make_variable(self, surface_number: int, param: str, variable: bool) -> str:
+    def set_model_glass(self, surface_number: int, index: float | None = None,
+                        abbe: float | None = None, vary_index: bool = True,
+                        vary_abbe: bool = True, dpgf: float | None = None,
+                        vary_dpgf: bool = False) -> str:
+        """把某面的玻璃设为"模型玻璃"(Model Glass)，并可令折射率/阿贝数为变量。
+
+        SolveType_MaterialModel=24；参数在 ISolveMaterialModel 上：
+        IndexNd / AbbeVd / dPgF 为数值，VaryIndex / VaryAbbe / VarydPgF 为变量开关。
+        不传 index/abbe 时沿用 Zemax 由当前真实玻璃初始化出的 nd/vd。
+        """
+        lde = self.conn.lde
+        surf = lde.GetSurfaceAt(surface_number)
+        cell = surf.MaterialCell
+        try:
+            solve = cell.CreateSolveType(24)  # SolveType_MaterialModel
+        except Exception as e:
+            return json.dumps({"error": f"创建模型玻璃 solve 失败: {e}"}, ensure_ascii=False)
+        if solve is None:
+            return json.dumps({"error": "CreateSolveType(24) 返回 None"}, ensure_ascii=False)
+
+        detail: dict[str, object] = {}
+        try:
+            model = solve._S_MaterialModel
+        except Exception as e:
+            return json.dumps({"error": f"取 ISolveMaterialModel 失败: {e}"}, ensure_ascii=False)
+
+        def _read(attr):
+            try:
+                return getattr(model, attr)
+            except Exception:
+                return None
+
+        before = {"index": _read("IndexNd"), "abbe": _read("AbbeVd")}
+        try:
+            if index is not None:
+                model.IndexNd = float(index)
+            if abbe is not None:
+                model.AbbeVd = float(abbe)
+            model.VaryIndex = bool(vary_index)
+            model.VaryAbbe = bool(vary_abbe)
+            if dpgf is not None:
+                model.dPgF = float(dpgf)
+            model.VarydPgF = bool(vary_dpgf)
+        except Exception as e:
+            detail["warning"] = f"参数设置失败: {e}"
+
+        cell.SetSolveData(solve)
+        after = {"index": _read("IndexNd"), "abbe": _read("AbbeVd")}
+        return json.dumps(
+            {
+                "ok": True,
+                "surface": surface_number,
+                "glass_before": str(_safe(surf, "Material", "")),
+                "index_before": before.get("index"),
+                "abbe_before": before.get("abbe"),
+                "index_after": after.get("index"),
+                "abbe_after": after.get("abbe"),
+                "vary_index": bool(vary_index),
+                "vary_abbe": bool(vary_abbe),
+                "detail": detail,
+            },
+            ensure_ascii=False,
+        )
+
+    def set_solve(self, surface_number: int, solve_type: str = "marginal_ray_height",
+                  param: str = "thickness", height: float = 0.0, pupil_zone: float = 0.0) -> str:
+        """设置表面单元格的 Solve（边缘光线高度 / 固定 / 变量）。
+
+        教材里"令程序自动选择像平面，使轴上点边缘光线交点高度为零"，
+        对应像面厚度上的 Marginal Ray Height solve（Height=0, PupilZone=0）。
+        """
+        lde = self.conn.lde
+        surf = lde.GetSurfaceAt(surface_number)
+        cell_map = {"radius": "RadiusCell", "thickness": "ThicknessCell", "conic": "ConicCell"}
+        cell_attr = cell_map.get((param or "").strip().lower())
+        if not cell_attr:
+            return json.dumps({"error": f"不支持的位置: {param}"}, ensure_ascii=False)
+        cell = getattr(surf, cell_attr)
+        st = (solve_type or "").strip().lower()
+
+        if st in ("marginal_ray_height", "marginalrayheight", "mrh"):
+            try:
+                solve = cell.CreateSolveType(6)  # SolveType_MarginalRayHeight
+            except Exception as e:
+                return json.dumps({"error": f"创建 solve 失败: {e}"}, ensure_ascii=False)
+            if solve is None:
+                return json.dumps({"error": "CreateSolveType 返回 None"}, ensure_ascii=False)
+            detail: dict[str, object] = {}
+            try:
+                mrh = solve._S_MarginalRayHeight
+                mrh.Height = float(height)
+                mrh.PupilZone = float(pupil_zone)
+                detail = {"height": float(height), "pupil_zone": float(pupil_zone)}
+            except Exception as e:
+                detail = {"warning": f"参数设置失败: {e}"}
+            cell.SetSolveData(solve)
+            readback = None
+            try:
+                readback = cell.GetSolveData().Type
+            except Exception:
+                pass
+            return json.dumps(
+                {
+                    "ok": True,
+                    "surface": surface_number,
+                    "solve": "marginal_ray_height",
+                    "detail": detail,
+                    "solve_type_readback": readback,
+                },
+                ensure_ascii=False,
+            )
+        if st == "fixed":
+            cell.MakeSolveFixed()
+            return json.dumps({"ok": True, "surface": surface_number, "solve": "fixed"}, ensure_ascii=False)
+        if st == "variable":
+            cell.MakeSolveVariable()
+            return json.dumps({"ok": True, "surface": surface_number, "solve": "variable"}, ensure_ascii=False)
+        return json.dumps({"error": f"不支持的 solve 类型: {solve_type}"}, ensure_ascii=False)
+
+    def make_variable(self, surface_number: int, param: str, variable: bool, catalog: str = None) -> str:
         lde = self.conn.lde
         surf = lde.GetSurfaceAt(surface_number)
 
@@ -1546,28 +1945,90 @@ class ZemaxToolkit:
             "radius": "RadiusCell",
             "thickness": "ThicknessCell",
             "conic": "ConicCell",
+            "material": "MaterialCell",
         }
         cell_attr = cell_map.get(param)
         if not cell_attr:
             return json.dumps({"error": f"不支持的参数: {param}"}, ensure_ascii=False)
 
         cell = getattr(surf, cell_attr)
-        if variable:
-            cell.MakeSolveVariable()
-        else:
-            cell.MakeSolveFixed()
 
-        status = "变量" if variable else "固定"
+        if param == "material":
+            # 玻璃：variable=true 表示设为"替代玻璃"(Substitute solve)，让优化器在玻璃库中自动搜索更优玻璃。
+            if variable:
+                try:
+                    # SolveType_MaterialSubstitute = 22
+                    solve = cell.CreateSolveType(22)
+                    if solve is not None:
+                        # 设置替代玻璃搜索的目录 (ISolveMaterialSubstitute.catalog)
+                        if catalog:
+                            try:
+                                solve.catalog = catalog
+                            except Exception:
+                                pass
+                        # 关键：必须 SetSolveData 把 solve 写回单元格，否则不生效
+                        cell.SetSolveData(solve)
+                    status = "替代玻璃(Substitute)变量"
+                except Exception as e:
+                    return json.dumps(
+                        {"error": f"设置替代玻璃失败: {e}"},
+                        ensure_ascii=False,
+                    )
+            else:
+                cell.MakeSolveFixed()
+                status = "固定(玻璃)"
+        else:
+            if variable:
+                cell.MakeSolveVariable()
+                status = "变量"
+            else:
+                cell.MakeSolveFixed()
+                status = "固定"
+
         return json.dumps(
             {"ok": True, "message": f"面 {surface_number} 的 {param} 已设为{status}"},
             ensure_ascii=False,
         )
 
     # ---- 优化 ----
-    def run_optimization(self, algorithm: str = "DLS", cycles: str = "Automatic") -> str:
+    def run_optimization(self, algorithm: str = "DLS", cycles: str = "Automatic", duration_seconds: int = 30) -> str:
         from win32com.client import CastTo
 
         tools = self.conn.system.Tools
+
+        # Hammer(锤优化/全局搜索) 用于替代玻璃、全局寻优；DLS/OD 是局部优化
+        # Hammer 是"持续运行"型优化：官方用法 RunAndWaitWithTimeout(seconds) 持续运行 N 秒后 Cancel。
+        if algorithm == "Hammer":
+            opt = tools.OpenHammerOptimization()
+            if opt is None:
+                return json.dumps(
+                    {"error": "无法打开锤优化(Hammer)工具。可能原因: 1) 没有设置评价函数; 2) Zemax UI 中有其他工具窗口打开; 3) 没有变量。请关闭 Zemax 中的其他工具窗口后重试。"},
+                    ensure_ascii=False,
+                )
+            _safe_set_attr(opt, "Algorithm", 0)
+            tool_base = _cast_to_system_tool(opt)
+            # 官方用法（ZOS-API IHammerOptimization）：RunAndWaitWithTimeout(seconds) 持续运行 N 秒，
+            # 超时后工具继续跑，需 Cancel + WaitForCompletion + Close。
+            # 注意：不要设 AutomaticOptimization=True（那是"自动优化"按钮，只跑一轮）。
+            try:
+                tool_base.RunAndWaitWithTimeout(float(duration_seconds))
+            except Exception:
+                pass
+            mfv = _safe(opt, "CurrentMeritFunction", None)
+            try:
+                tool_base.Cancel()
+            except Exception:
+                pass
+            try:
+                tool_base.WaitForCompletion()
+            except Exception:
+                pass
+            tool_base.Close()
+            return json.dumps(
+                {"ok": True, "algorithm": "Hammer", "duration_seconds": duration_seconds, "final_merit_function": mfv},
+                ensure_ascii=False,
+            )
+
         opt = tools.OpenLocalOptimization()
         if opt is None:
             return json.dumps(
@@ -1607,6 +2068,97 @@ class ZemaxToolkit:
 
         return json.dumps(
             {"ok": True, "algorithm": algorithm, "cycles": cycles, "final_merit_function": mfv},
+            ensure_ascii=False,
+        )
+
+    # ---- Hammer 持续运行（界面保持打开，跨工具调用保持状态）----
+    def start_hammer(self) -> str:
+        """启动 Hammer 持续运行（不关闭界面），返回初始 MF。之后可用 get_hammer_status 读 MF、stop_hammer 停止。
+
+        官方正确用法（ZOS-API IHammerOptimization）：
+            HammerOpt = Tools.OpenHammerOptimization()
+            HammerOpt.Run()   # 异步启动，立即返回，持续运行
+            HammerOpt.Cancel()  # 停止
+            HammerOpt.WaitForCompletion()
+            HammerOpt.Close()
+        注意：不要设 AutomaticOptimization=True（那是"自动优化"按钮，只跑一轮）。
+        """
+        tools = self.conn.system.Tools
+        opt = tools.OpenHammerOptimization()
+        if opt is None:
+            return json.dumps(
+                {"error": "无法打开锤优化(Hammer)工具。可能原因: 1) 没有设置评价函数; 2) Zemax UI 中有其他工具窗口打开; 3) 没有变量。请关闭 Zemax 中的其他工具窗口后重试。"},
+                ensure_ascii=False,
+            )
+        _safe_set_attr(opt, "Algorithm", 0)  # DampedLeastSquares
+        tool_base = _cast_to_system_tool(opt)
+        try:
+            # 异步启动，立即返回，Hammer 在 Zemax 中持续运行
+            tool_base.Run()
+        except Exception as e:
+            return json.dumps({"error": f"启动 Hammer 失败: {e}"}, ensure_ascii=False)
+
+        # 保存持久引用，界面保持打开、持续运行
+        self._hammer_opt = opt
+        self._hammer_tool_base = tool_base
+        self._hammer_start_mf = _safe(opt, "CurrentMeritFunction", None)
+
+        return json.dumps(
+            {"ok": True, "message": "Hammer 已启动并持续运行(界面保持打开)", "initial_merit_function": self._hammer_start_mf},
+            ensure_ascii=False,
+        )
+
+    def get_hammer_status(self) -> str:
+        """读取 Hammer 当前评价函数值（不停止、不关闭界面）。"""
+        if self._hammer_opt is None:
+            return json.dumps(
+                {"ok": False, "error": "Hammer 未在运行。请先调用 start_hammer。"},
+                ensure_ascii=False,
+            )
+        mfv = _safe(self._hammer_opt, "CurrentMeritFunction", None)
+        return json.dumps(
+            {
+                "ok": True,
+                "running": True,
+                "current_merit_function": mfv,
+                "start_merit_function": self._hammer_start_mf,
+                "delta": (self._hammer_start_mf - mfv) if (self._hammer_start_mf is not None and mfv is not None) else None,
+            },
+            ensure_ascii=False,
+        )
+
+    def stop_hammer(self) -> str:
+        """停止 Hammer 并关闭界面。"""
+        if self._hammer_opt is None:
+            return json.dumps(
+                {"ok": False, "error": "Hammer 未在运行。请先调用 start_hammer。"},
+                ensure_ascii=False,
+            )
+        mfv = _safe(self._hammer_opt, "CurrentMeritFunction", None)
+        try:
+            self._hammer_tool_base.Cancel()
+        except Exception:
+            pass
+        try:
+            self._hammer_tool_base.WaitForCompletion()
+        except Exception:
+            pass
+        try:
+            self._hammer_tool_base.Close()
+        except Exception:
+            pass
+        start_mf = self._hammer_start_mf
+        self._hammer_opt = None
+        self._hammer_tool_base = None
+        self._hammer_start_mf = None
+        return json.dumps(
+            {
+                "ok": True,
+                "message": "Hammer 已停止并关闭",
+                "start_merit_function": start_mf,
+                "final_merit_function": mfv,
+                "delta": (start_mf - mfv) if (start_mf is not None and mfv is not None) else None,
+            },
             ensure_ascii=False,
         )
 
@@ -2299,20 +2851,29 @@ class ZemaxToolkit:
         # RSCE / RWCE col layout (0-indexed from GetOperandCell):
         # col 1 = Type, col 2 = Int1(surf), col 3 = Int2(wave),
         # col 4 = Hx, col 5 = Hy, col 6 = Px, col 7 = Py
+        # 归一化基准必须取「全部视场 |y| 的最大值」，不能取最后一个视场。
+        # 曾踩坑：视场按降序排列时（如 16/14/12/8/4/0°）最后一个视场是 0°，
+        # max_fy 变成 0 → 所有视场的 Hy 都被算成 0 → 每个视场都读成轴上点的值
+        # （表现为各视场 RMS 完全相同，是静默错误）。
+        max_fy = 0.0
+        max_fx = 0.0
+        try:
+            for _fi in range(1, num_fields + 1):
+                _fx_tmp, _fy_tmp, _ = self.conn.get_field_data(sys_data.Fields.GetField(_fi))
+                if _fy_tmp is not None and abs(_fy_tmp) > max_fy:
+                    max_fy = abs(_fy_tmp)
+                if _fx_tmp is not None and abs(_fx_tmp) > max_fx:
+                    max_fx = abs(_fx_tmp)
+        except Exception:
+            pass
+        if max_fy == 0.0:
+            max_fy = max_fx if max_fx > 0 else 1.0  # 全轴上视场时用 x，再退回 1.0
+
         rsce_rows = []
         rwce_rows = []
         for fi in range(1, num_fields + 1):
             f_obj = sys_data.Fields.GetField(fi)
             _, fy, _ = self.conn.get_field_data(f_obj)
-            # 归一化视场高度 (假设最大视场 = 1)
-            max_fy = 1.0
-            try:
-                fm = sys_data.Fields.GetField(num_fields)
-                _, max_fy_raw, _ = self.conn.get_field_data(fm)
-                if max_fy_raw and max_fy_raw != 0:
-                    max_fy = abs(max_fy_raw)
-            except Exception:
-                pass
             hy_norm = (fy / max_fy) if max_fy != 0 else 0.0
 
             # RSCE row
@@ -2575,17 +3136,24 @@ class ZemaxToolkit:
 
         num_points = max(3, min(11, num_points))
 
-        # 尝试 DISC 操作数
-        type_val_disc = _resolve_operand_type("DISC")
+        # 尝试逐视场畸变操作数：优先 DIMX（Int1=视场号，实测可靠），缺失时退回 DISC
+        type_val_disc = _resolve_operand_type("DIMX") or _resolve_operand_type("DISC")
         type_val_dimx = _resolve_operand_type("DIMX")  # 最大畸变
 
         added = []
 
         if type_val_disc is not None:
-            # 按均匀归一化视场高度采样
-            for fi in range(1, num_points + 1):
-                # 将采样视场映射到实际视场编号范围
-                field_idx = max(1, min(num_fields, round(1 + (fi - 1) * (num_fields - 1) / max(1, num_points - 1))))
+            # 视场选择：默认逐个遍历全部视场（畸变本身就是逐视场量，无需抽样）。
+            # 曾踩坑：固定 num_points=5 抽样 + round() 会跳过实际视场
+            # （6 视场时映射为 1,2,4,5,6，12° 视场被漏掉），导致报告缺项。
+            if num_fields <= 12:
+                field_indices = list(range(1, num_fields + 1))
+            else:
+                field_indices = sorted({
+                    max(1, min(num_fields, round(1 + (i - 1) * (num_fields - 1) / max(1, num_points - 1))))
+                    for i in range(1, num_points + 1)
+                })
+            for field_idx in field_indices:
                 pos = _safe(mfe, "NumberOfOperands", 0) + 1
                 row = None
                 try:
@@ -2601,17 +3169,14 @@ class ZemaxToolkit:
                 # ChangeType 后重新获取引用
                 row = _refetch_last_row(mfe) or row
                 _safe_set_attr(row, "Weight", 0.0)
-                # DISC: col2(Int1)=wave 被Zemax强制为0, col3(Int2)=field number!
-                # 经诊断: col4(Hx)=Integer类型+无法写, col5(Hy)=DoubleValue read_back=inf(失败)
-                # 结论: DISC 通过 col3(Int2)=field_idx 指定视场
-                # col3 write 已确认有效(read_back=field_idx ✓)
-                try:
-                    _dc3 = row.GetOperandCell(3)
-                    if _dc3 is not None:
-                        _dc3.IntegerValue = field_idx
-                except Exception:
-                    pass
-                added.append(("DISC", field_idx, _safe(mfe, "NumberOfOperands", 0)))
+                _safe_set_attr(row, "Target", 0.0)
+                # 用 DIMX(Int1=视场号, Int2=主波长, 第三参=0 相对畸变) 读逐视场畸变。
+                # 曾用 DISC：写 col3=视场号读回成功，但实算值不随视场变化
+                # （16° 实为 2.16% 却报 0.35%），不可用，已弃用。
+                _set_operand_int_param(row, 1, field_idx)         # Int1 = 视场号
+                _set_operand_int_param(row, 2, primary_wave_idx)  # Int2 = 主波长
+                _set_operand_double_param(row, 3, 0.0)            # 0 = 相对畸变
+                added.append(("DIMX", field_idx, _safe(mfe, "NumberOfOperands", 0)))
 
         # DIMX (最大畸变，wave=primary)
         dimx_row = None
@@ -2629,7 +3194,12 @@ class ZemaxToolkit:
                 _set_row_operand_type(row, type_val_dimx)
                 row = _refetch_last_row(mfe) or row
                 _safe_set_attr(row, "Weight", 0.0)
-                _set_operand_int_param(row, 1, primary_wave_idx)
+                _safe_set_attr(row, "Target", 0.0)
+                # Int1 = 0 → 全视场中的最大畸变；Int2 = 主波长
+                # （曾把波长写进 Int1，等价于只算「视场2 = 14°」，把最大值报小了）
+                _set_operand_int_param(row, 1, 0)
+                _set_operand_int_param(row, 2, primary_wave_idx)
+                _set_operand_double_param(row, 3, 0.0)   # 0 = 相对畸变
                 dimx_row = _safe(mfe, "NumberOfOperands", 0)
 
         try:
@@ -3280,6 +3850,166 @@ class ZemaxToolkit:
             ]))
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    def _airy_radius_um(self) -> float | None:
+        """艾里斑半径 (μm) = 0.61·λ/NA，与 Zemax 图中标注的 Airy 半径一致。
+
+        近轴关系 NA = sin(atan(EPD / (2·EFFL)))。注意用 sin 而非 tan：
+        常见的 1.22·λ·(EFFL/EPD) 写法等价于用 tan，会比 Zemax 的 NA 偏大，
+        导致艾里半径偏小（实测 1.667 vs 1.705 μm）。
+        """
+        try:
+            wls = self.conn.system_data.Wavelengths
+            lam = None
+            best_weight = -1.0
+            for i in range(1, int(wls.NumberOfWavelengths) + 1):
+                w = wls.GetWavelength(i)
+                weight = float(getattr(w, "Weight", 1.0) or 1.0)
+                if weight > best_weight:
+                    best_weight = weight
+                    lam = float(w.Wavelength)
+            epd = float(self.conn.system.SystemData.Aperture.ApertureValue)
+            first_order = json.loads(self.get_first_order_data())
+            effl = float(first_order["first_order_data"]["EFFL"]["value"])
+            if not (lam and epd > 0 and effl > 0):
+                return None
+            na = math.sin(math.atan(epd / (2.0 * effl)))
+            if na <= 0:
+                return None
+            return round(0.61 * lam / na, 4)
+        except Exception:
+            return None
+
+    def export_spot_diagram_image(self, file_path: str | None = None,
+                                  show_airy: bool = True, wave: int = 0) -> str:
+        """把点列图渲染成 PNG（固定文件名、覆盖保存），并叠加艾里斑参考圆。
+
+        ZOS-API 的分析类没有位图导出接口，因此按真实光线落点自行渲染；
+        艾里斑半径按 0.61·λ/NA 计算，与 Zemax 图中 Airy Disk 圈一致。
+        """
+        settings = {
+            "field": 0,
+            "wave": int(wave or 0),
+            "ShowAiryDisk": bool(show_airy),
+        }
+        capture = self._run_analysis_capture(
+            "standard_spot", settings_overrides=settings, export_basename="spot_diagram"
+        )
+        results = capture.get("results") or {}
+        spot_data = results.get("spot_data") or {}
+        if not spot_data.get("fields"):
+            spot_data = {"fields": _parse_spot_text_from_capture(capture) or []}
+        fields = spot_data.get("fields") or []
+        if not fields:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "无法取得点列图数据（可能光线追迹失败或数据为空）",
+                    "exports": capture.get("exports"),
+                },
+                ensure_ascii=False,
+            )
+
+        airy_um = self._airy_radius_um() if show_airy else None
+        airy_mm = (airy_um / 1000.0) if airy_um else None
+
+        # 每视场 RMS / GEO（µm）都取自点列图分析自身的 spot_data，
+        # 这样图上数值与 Zemax 原生点列图逐值一致（实测 field1 RMS=9.767、GEO=21.46 完全吻合）。
+        # 注意：不要用 get_image_quality 的 rms_spot_um —— 它的采样口径不同，
+        # 同一系统离线视场会给出 17.70 而点列图是 25.64，混用会误导。
+        rms_um_by_field: dict[int, float] = {}
+        geo_um_by_field: dict[int, float] = {}
+        try:
+            factor = _spot_radius_unit_factor(spot_data, results.get("spot_ray_points"))
+            for item in fields:
+                fid = int(item.get("field") or 0)
+                waves_ = item.get("waves") or []
+                rms_vals = [
+                    abs(float(w.get("rms_radius_lens_units")))
+                    for w in waves_
+                    if isinstance(w.get("rms_radius_lens_units"), (int, float))
+                ]
+                geo_vals = [
+                    abs(float(w.get("geo_radius_lens_units")))
+                    for w in waves_
+                    if isinstance(w.get("geo_radius_lens_units"), (int, float))
+                ]
+                if rms_vals:
+                    rms_um_by_field[fid] = max(rms_vals) * factor
+                if geo_vals:
+                    geo_um_by_field[fid] = max(geo_vals) * factor
+        except Exception:
+            pass
+
+        current_file = self._current_system_file()
+        base_dir = current_file.parent if current_file else _WORKSPACE_ROOT
+        out_dir = base_dir / "layouts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = Path(file_path) if file_path else out_dir / "spot_diagram.png"
+        _delete_file_quietly(target)
+        _render_spot_summary_png(
+            spot_data, target, results.get("spot_ray_points"), airy_mm,
+            rms_um_by_field=rms_um_by_field, geo_um_by_field=geo_um_by_field,
+        )
+
+        # 清掉本次运行产生的中间预览图（与最终 PNG 内容重复），原生 txt 保留供核对
+        try:
+            tmp_img = (capture.get("exports") or {}).get("image_path")
+            if tmp_img and Path(tmp_img).resolve() != target.resolve():
+                _delete_file_quietly(Path(tmp_img))
+        except Exception:
+            pass
+
+        summary = []
+        for item in fields:
+            # 原始 spot_data 的每一项只有 field 与 waves，没有顶层 rms/field_y。
+            # RMS 优先用 get_image_quality 的值（已验证），退而求其次从 waves 取最大。
+            fid = int(item.get("field") or 0)
+            waves_ = item.get("waves") or []
+            rms_vals = [
+                float(w.get("rms_radius_lens_units"))
+                for w in waves_
+                if isinstance(w.get("rms_radius_lens_units"), (int, float))
+            ]
+            rms = rms_um_by_field.get(fid) or (
+                item.get("rms_radius_um")
+                or item.get("rms_radius_lens_units")
+                or (max(rms_vals) if rms_vals else None)
+            )
+            fy = _finite_float(item.get("field_y"))
+            if fy is None:
+                try:
+                    fobj = self.conn.system_data.Fields.GetField(fid)
+                    _fx, fy, _wt = self.conn.get_field_data(fobj)
+                    fy = _finite_float(fy)
+                except Exception:
+                    fy = None
+            summary.append(
+                {
+                    "field": item.get("field"),
+                    "field_y": fy,
+                    "rms_um": _finite_float(rms),
+                    "geo_um": _finite_float(geo_um_by_field.get(fid)),
+                }
+            )
+        kind = _classify_export_file(target)
+        return json.dumps(
+            {
+                "ok": kind == "png",
+                "image_path": str(target) if kind == "png" else None,
+                "kind": kind,
+                "bytes": target.stat().st_size if target.exists() else 0,
+                "show_airy": bool(show_airy),
+                "airy_radius_um": airy_um,
+                "settings_report": capture.get("settings_report"),
+                "fields": summary,
+                "note": (
+                    "ZOS-API 无分析位图导出，图像由真实光线落点渲染；"
+                    "每格下方列出 RMS / GEO 半径（µm）与标尺；艾里斑按 0.61·λ/NA 绘制（与 Zemax 一致）。"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
     def get_fft_mtf_vs_field(self, frequencies: list | None = None, wave: int = 0,
                              sample_size: int | None = None, remove_vignetting: bool = False) -> str:
         """通过 FFT MTF vs Field Analysis 获取 MTF 随视场变化。"""
@@ -3742,6 +4472,350 @@ class ZemaxToolkit:
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    # ---- 实体干涉 / 净空检查 ----
+    def check_interference(self, min_clearance: float = 0.1, save_image: bool = True,
+                           image_path: str = None, stop_clearance: float = 2.0) -> str:
+        """检查所有相邻实体（透镜元件 / 光阑）之间的轴向边缘净空。
+
+        几何原理：面 i 的边缘位置 z_edge = z_vertex + sag(R, h)，
+        两实体净空 = z_front(B) + sag_B - (z_rear(A) + sag_A)。负值 = 实体相交。
+
+        与 check_manufacturability 的分工：后者只看单个元件的边厚与弯曲因子，
+        **不检查元件之间、元件与光阑之间是否插在一起**——这里是那个盲区。
+        """
+        import math
+        lde = self.conn.lde
+        num_surfs = lde.NumberOfSurfaces
+        last_surf = num_surfs - 1
+
+        surfaces = []
+        for i in range(num_surfs):
+            s = lde.GetSurfaceAt(i)
+            r = _safe(s, "Radius", 1e18)
+            t = _safe(s, "Thickness", 0.0)
+            mat = (_safe(s, "Material", "") or "").strip()
+            sd = abs(_safe(s, "SemiDiameter", 0.0) or 0.0)
+            surfaces.append({
+                "surf": i,
+                "radius": r if r is not None else 1e18,
+                "thickness": t if t is not None else 0.0,
+                "material": mat,
+                "semi_diameter": sd,
+                "is_stop": bool(_safe(s, "IsStop", False)),
+            })
+
+        # 顶点 z 坐标（面 1 为 0）
+        zv = {1: 0.0}
+        for i in range(1, last_surf):
+            zv[i + 1] = zv[i] + surfaces[i]["thickness"]
+
+        def _sag(R, h):
+            """矢高；返回 None 表示超半球无解。平面返回 0。"""
+            if R is None or abs(R) > 1e15:
+                return 0.0
+            if not h or h <= 0:
+                return 0.0
+            t = R * R - h * h
+            if t < 0:
+                return None
+            return R - math.copysign(math.sqrt(t), R)
+
+        notes = []
+
+        # ---- 识别实体：透镜组（连续非空材料）+ 光阑 ----
+        entities = []
+        idx = 1
+        elem_no = 0
+        while idx < last_surf:
+            s = surfaces[idx]
+            if s["material"] and s["material"].upper() not in ("", "MIRROR"):
+                group = [idx]
+                j = idx + 1
+                while j < last_surf and surfaces[j]["material"] and surfaces[j]["material"].upper() not in ("", "MIRROR"):
+                    group.append(j)
+                    j += 1
+                exit_surf = j
+                group.append(exit_surf)
+                elem_no += 1
+                entities.append({
+                    "kind": "element",
+                    "name": f"元件{_CIRCLED.get(elem_no, elem_no)}",
+                    "front_surf": group[0],
+                    "rear_surf": exit_surf,
+                    "surfs": group,
+                })
+                idx = j + 1
+            else:
+                idx += 1
+        for s in surfaces:
+            if s["is_stop"]:
+                entities.append({
+                    "kind": "stop",
+                    "name": "光阑(STOP)",
+                    "front_surf": s["surf"],
+                    "rear_surf": s["surf"],
+                    "surfs": [s["surf"]],
+                })
+        entities.sort(key=lambda e: (zv.get(e["front_surf"], 0.0), 0 if e["kind"] == "stop" else 1))
+
+        # ---- 逐对计算净空 ----
+        pairs = []
+        for a, b in zip(entities, entities[1:]):
+            sa = surfaces[a["rear_surf"]]
+            sb = surfaces[b["front_surf"]]
+            z_a, z_b = zv.get(a["rear_surf"], 0.0), zv.get(b["front_surf"], 0.0)
+            sd_a, sd_b = sa["semi_diameter"], sb["semi_diameter"]
+
+            hc = min(sd_a, sd_b)          # 同高度比较（面-面标准口径）
+            sag_a_c, sag_b_c = _sag(sa["radius"], hc), _sag(sb["radius"], hc)
+            # 各自口径比较（对光阑/机械件更保守）
+            sag_a_o, sag_b_o = _sag(sa["radius"], sd_a), _sag(sb["radius"], sd_b)
+
+            invalid = []
+            if sag_a_c is None or sag_b_c is None or sag_a_o is None or sag_b_o is None:
+                for nm, r_, h_ in ((a["name"], sa["radius"], sd_a), (b["name"], sb["radius"], sd_b)):
+                    if _sag(r_, h_) is None:
+                        invalid.append(f"{nm} 半口径 {h_:.3f} > |R| {abs(r_):.3f}（超半球，sag 无解）")
+
+            gap_common = None if (sag_a_c is None or sag_b_c is None) else (z_b + sag_b_c) - (z_a + sag_a_c)
+            gap_own = None if (sag_a_o is None or sag_b_o is None) else (z_b + sag_b_o) - (z_a + sag_a_o)
+            # 真实最小实体间隔：球面 sag 对 r 单调，极值只可能在 r=0 或 r=hc，故取三者最小
+            center_gap = (z_b + 0.0) - (z_a + 0.0)
+            cands = {}
+            cands["axis"] = center_gap
+            if gap_common is not None:
+                cands["edge_common"] = gap_common
+            if gap_own is not None:
+                cands["edge_own_sd"] = gap_own
+            where = min(cands, key=lambda k: cands[k])
+            gap = cands[where]
+            if where == "axis":
+                ez_rear, ez_front = z_a, z_b
+            elif where == "edge_common":
+                ez_rear, ez_front = z_a + sag_a_c, z_b + sag_b_c
+            else:
+                ez_rear, ez_front = z_a + sag_a_o, z_b + sag_b_o
+
+            thr = stop_clearance if (a["kind"] == "stop" or b["kind"] == "stop") else min_clearance
+            if gap < 0:
+                sev = "fail"
+            elif gap < thr:
+                sev = "warn"
+            else:
+                sev = "pass"
+
+            entry = {
+                "from": a["name"],
+                "to": b["name"],
+                "rear_surf": a["rear_surf"],
+                "front_surf": b["front_surf"],
+                "center_gap_mm": round(center_gap, 4),
+                "sag_rear_mm": None if sag_a_c is None else round(sag_a_c, 4),
+                "sag_front_mm": None if sag_b_c is None else round(sag_b_c, 4),
+                "clearance_mm": round(gap, 4),
+                "clearance_at": where,
+                "edge_z_rear": round(ez_rear, 6),
+                "edge_z_front": round(ez_front, 6),
+                "clearance_common_mm": None if gap_common is None else round(gap_common, 4),
+                "clearance_own_sd_mm": None if gap_own is None else round(gap_own, 4),
+                "threshold_mm": thr,
+                "severity": sev,
+                "is_stop_pair": a["kind"] == "stop" or b["kind"] == "stop",
+            }
+            if invalid:
+                entry["notes"] = invalid
+            pairs.append(entry)
+
+        # ---- 汇总 ----
+        vals = [p["clearance_mm"] for p in pairs if p["clearance_mm"] is not None]
+        min_gap = min(vals) if vals else None
+        if any(p["severity"] == "fail" for p in pairs):
+            overall = "fail"
+        elif any(p["severity"] in ("warn", "unknown") for p in pairs):
+            overall = "warn"
+        else:
+            overall = "pass"
+
+        summary = []
+        for p in pairs:
+            if p["severity"] == "fail":
+                summary.append(
+                    f"❌ {p['from']} → {p['to']}：净空 {p['clearance_mm']:.3f} mm（负值＝实体相交，位置在 {p['clearance_at']}）"
+                )
+            elif p["severity"] == "warn":
+                summary.append(
+                    f"⚠️ {p['from']} → {p['to']}：净空 {p['clearance_mm']:.3f} mm < {p['threshold_mm']:.2f} mm"
+                    f"（最紧处在 {p['clearance_at']}）"
+                )
+        if not summary:
+            summary.append("✅ 所有相邻实体净空充足")
+
+        # ---- 可选：生成不依赖像素标定的几何示意图 ----
+        img_out = None
+        if save_image:
+            try:
+                img_out = self._render_clearance_schematic(surfaces, entities, pairs, zv, image_path)
+            except Exception as exc:  # 出图失败不影响数值结论
+                notes.append(f"示意图生成失败（数值结论不受影响）：{exc}")
+
+        result = {
+            "overall": overall,
+            "min_clearance_mm": None if min_gap is None else round(min_gap, 4),
+            "thresholds": {"element_pair_mm": min_clearance, "stop_pair_mm": stop_clearance},
+            "pairs": pairs,
+            "summary": summary,
+            "schematic": img_out,
+            "notes": notes,
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _render_clearance_schematic(self, surfaces, entities, pairs, zv, image_path=None) -> str:
+        """按 LDE 真实几何画出轴向剖面示意图，并把每对实体的净空标在图上。
+
+        关键设计：**不依赖 Zemax 位图的像素标定**——图完全由 z 坐标与 sag 数据生成，
+        因此可确定性复现，不会出现"标定错就画错"的问题。
+        """
+        import math
+        from PIL import Image, ImageDraw, ImageFont
+
+        last_surf = len(surfaces) - 1
+        total_z = zv.get(last_surf, 0.0)
+
+        # 视场半径上限
+        max_sd = max((s["semi_diameter"] for s in surfaces[1:last_surf] if s["semi_diameter"]), default=10.0)
+
+        W = 1400
+        ML, MR, MT, MB = 90, 130, 60, 90
+        z_span = total_z if total_z > 0 else 1.0
+        sx = (W - ML - MR) / z_span
+        # 等比例：横向纵向同比例，否则弯月面会被压扁成平板
+        sy = sx
+        headroom = 34 * max(1, len(pairs)) + 44          # 顶部标注区高度
+        axis_y = MT + headroom + max_sd * sy
+        H = int(axis_y + max_sd * sy + MB)
+        r_span = max(max_sd * 1.15, 1e-6)
+
+        def X(z):
+            return ML + z * sx
+
+        def Y(r):
+            return axis_y + r * sy
+
+        def sag(R, h):
+            if R is None or abs(R) > 1e15:
+                return 0.0
+            t = R * R - h * h
+            if t < 0:
+                return None
+            return R - math.copysign(math.sqrt(t), R)
+
+        img = Image.new("RGB", (W, H), (255, 255, 255))
+        dr = ImageDraw.Draw(img)
+
+        def font(sz):
+            for p in ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"):
+                try:
+                    return ImageFont.truetype(p, sz)
+                except Exception:
+                    continue
+            return ImageFont.load_default()
+
+        f_lbl, f_sm, f_gap = font(19), font(15), font(17)
+
+        # 光轴
+        dr.line([(X(0), axis_y), (X(total_z), axis_y)], fill=(160, 160, 160), width=1)
+
+        # 透镜实体：上下两半填充
+        lens_fill = (222, 235, 248)
+        lens_line = (30, 60, 110)
+        N = 90
+        for e in entities:
+            if e["kind"] != "element":
+                continue
+            fi, ri = e["front_surf"], e["rear_surf"]
+            s_f, s_r = surfaces[fi], surfaces[ri]
+
+            def surf_pts(s, n=N):
+                pts, ok = [], True
+                for k in range(n + 1):
+                    h = s["semi_diameter"] * k / n
+                    sg = sag(s["radius"], h)
+                    if sg is None:
+                        ok = False
+                        break
+                    pts.append((X(zv[s["surf"]] + sg), h))
+                return (pts if ok else None)
+
+            pf = surf_pts(s_f)
+            pr = surf_pts(s_r)
+            if pf is None or pr is None:
+                # 超半球：退化为直线轮廓，并标注
+                pf = [(X(zv[fi]), 0.0), (X(zv[fi]), s_f["semi_diameter"])]
+                pr = [(X(zv[ri]), s_r["semi_diameter"]), (X(zv[ri]), 0.0)]
+            top = pf + pr[::-1]
+            bot = [(x, -r) for x, r in top]
+            dr.polygon([(x, Y(r)) for x, r in top], fill=lens_fill, outline=lens_line)
+            dr.polygon([(x, Y(r)) for x, r in bot], fill=lens_fill, outline=lens_line)
+            dr.line([(x, Y(r)) for x, r in top], fill=lens_line, width=2)
+            dr.line([(x, Y(r)) for x, r in bot], fill=lens_line, width=2)
+
+            mid = (zv[fi] + zv[ri]) / 2.0
+            dr.text((X(mid) - 26, Y(max(s_f["semi_diameter"], s_r["semi_diameter"])) - 26),
+                    e["name"], font=f_lbl, fill=lens_line)
+
+        # 光阑：两根短竖线 + 开口标注
+        for e in entities:
+            if e["kind"] != "stop":
+                continue
+            s = surfaces[e["front_surf"]]
+            x = X(zv[s["surf"]])
+            h = s["semi_diameter"]
+            dr.line([(x, Y(h) - 26), (x, Y(h))], fill=(20, 90, 220), width=4)
+            dr.line([(x, Y(-h)), (x, Y(-h) + 26)], fill=(20, 90, 220), width=4)
+            dr.line([(x - 22, Y(h) - 26), (x + 22, Y(h) - 26)], fill=(20, 90, 220), width=3)
+            dr.line([(x - 22, Y(-h) + 26), (x + 22, Y(-h) + 26)], fill=(20, 90, 220), width=3)
+            dr.text((x - 34, Y(-h) + 34), "STOP", font=f_sm, fill=(20, 90, 220))
+
+        # 净空标注：从透镜最高边缘往上依次排开，互不重叠、也不压标题
+        top_edge_y = axis_y - max_sd * sy
+        lane0 = min(top_edge_y - 34, axis_y - 40)
+        for k, p in enumerate(pairs):
+            gap = p["clearance_mm"]
+            if gap is None:
+                continue
+            xa = X(p.get("edge_z_rear", zv[p["rear_surf"]]))
+            xb = X(p.get("edge_z_front", zv[p["front_surf"]]))
+            y = lane0 - k * 32
+            if y < MT + 34:
+                y = MT + 34
+            sev = p["severity"]
+            col = (200, 30, 30) if sev == "fail" else ((215, 120, 0) if sev == "warn" else (20, 130, 70))
+            dr.line([(xa, y), (xb, y)], fill=col, width=2)
+            for xx in (xa, xb):
+                dr.line([(xx, y - 8), (xx, y + 8)], fill=col, width=2)
+                dr.line([(xx, y + 8), (xx, min(y + 8 + 26, axis_y))], fill=col, width=1)
+            txt = f"{_short_name(p['from'])} → {_short_name(p['to'])}   {gap:.2f} mm"
+            tw = dr.textlength(txt, font=f_gap) if hasattr(dr, "textlength") else 200
+            tx = min(max(ML, (xa + xb) / 2 - tw / 2), W - MR - tw)
+            dr.text((tx, y - 24), txt, font=f_gap, fill=col)
+
+        # 底部：z 标尺与标题
+        yz = H - 30
+        dr.line([(X(0), yz - 6), (X(total_z), yz - 6)], fill=(120, 120, 120), width=1)
+        dr.text((X(0), yz), "z = 0（面1）", font=f_sm, fill=(120, 120, 120))
+        dr.text((X(total_z) - 96, yz), f"像面 z={total_z:.2f}", font=f_sm, fill=(120, 120, 120))
+        dr.text((ML, 16), "实体净空剖面（按 LDE 真实几何生成，非位图标定）", font=f_lbl, fill=(40, 40, 40))
+
+        if image_path:
+            out = Path(image_path)
+        else:
+            current_file = self._current_system_file()
+            base_dir = current_file.parent if current_file else _WORKSPACE_ROOT
+            out = Path(base_dir) / "layouts" / "_clearance_check.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out)
+        return str(out)
+
     # ---- 玻璃库管理 ----
     def get_glass_catalogs(self, catalog: str = None) -> str:
         """获取玻璃库信息：当前使用的目录、可用目录、指定目录中的材料。"""
@@ -3909,7 +4983,7 @@ class ZemaxToolkit:
             "auto_export": auto_export,
         }
 
-        # 导出到文件，供 Agent 使用 view_image 检查结构；仅返回真实图片路径。
+        # 导出到文件，供 Agent 检查结构；仅返回真实图片路径。
         if export_path:
             image_info = _export_verified_analysis_image(
                 analysis,
@@ -3922,12 +4996,292 @@ class ZemaxToolkit:
                 result["export_path"] = image_info["image_path"]
                 result["exported_to"] = image_info["image_path"]
             else:
-                result["export_path"] = None
-                result["export_error"] = "Analysis.ToFile 未生成可验证的图片文件；已删除非图片导出。"
+                # Analysis.ToFile 对图形窗口只能写文本 → 回退到 Layouts 图形导出接口
+                try:
+                    fallback = json.loads(
+                        self.export_layout_image(layout_type=layout_type, file_path=export_path)
+                    )
+                except Exception as e:  # pragma: no cover - 防御
+                    fallback = {"ok": False, "error": str(e)}
+                if fallback.get("ok"):
+                    result["image_path"] = fallback.get("image_path")
+                    result["export_path"] = fallback.get("image_path")
+                    result["exported_to"] = fallback.get("image_path")
+                    result["image_export_ok"] = True
+                    result["image_export_kind"] = fallback.get("kind")
+                    result["image_export_is_viewable_by_agent"] = True
+                    result["image_export_note"] = "Analysis.ToFile 无效，已改用 system.Tools.Layouts 图形导出接口"
+                else:
+                    result["export_path"] = None
+                    result["export_error"] = "布局图导出失败（ToFile 与 Layouts 接口均未产出图片）"
+                    result["export_error_detail"] = fallback
 
         # 注意：不要 Close()，让窗口保留在 GUI 中供用户查看
 
         return json.dumps(result, ensure_ascii=False)
+
+    # ---- 布局图位图导出（正确接口：system.Tools.Layouts，不是 Analysis.ToFile）----
+    def export_layout_image(
+        self,
+        layout_type: str = "3D",
+        width: int = 1600,
+        height: int = 1000,
+        file_path: str | None = None,
+        hide_lens_edges: bool = True,
+        view: str = "current",
+        angle_x: float = 0.0,
+        angle_y: float = 0.0,
+        angle_z: float = 0.0,
+    ) -> str:
+        """导出布局图真实位图.
+
+        Analysis.ToFile 对图形窗口只能写出文本摘要；真正能出图的是
+        ``system.Tools.Layouts.Open3DViewerExport()`` / ``OpenCrossSectionExport()``，
+        其 ``OutputFilename`` + ``OutputPixelWidth/Height`` 设好后读取
+        ``SaveImageAsFile`` 即触发保存。
+        """
+        system = self.conn.system
+        lt = (layout_type or "3D").upper()
+
+        # 复用已打开的布局窗口；只有找不到同类型窗口时才新建一个
+        analysis_id = 57 if lt == "3D" else 56
+        analyses = getattr(system, "Analyses", None)
+        window_action = "skipped"
+        if analyses is not None:
+            existing = None
+            try:
+                count = int(analyses.NumberOfAnalyses)
+            except Exception:
+                count = 0
+            for idx in range(1, count + 1):
+                try:
+                    candidate = analyses.Get_AnalysisAtIndex(idx)
+                except Exception:
+                    continue
+                if int(_safe(candidate, "AnalysisType", -1) or -1) == analysis_id:
+                    existing = candidate
+                    break
+            try:
+                if existing is not None:
+                    existing.ApplyAndWaitForCompletion()
+                    window_action = "reused"
+                else:
+                    analyses.New_Analysis(analysis_id).ApplyAndWaitForCompletion()
+                    window_action = "created"
+            except Exception as e:
+                window_action = f"failed: {e}"
+                logger.warning(f"布局窗口刷新/创建失败（不影响图片导出）: {e}")
+
+        current_file = self._current_system_file()
+        base_dir = current_file.parent if current_file else _WORKSPACE_ROOT
+        out_dir = base_dir / "layouts"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # 固定文件名（不带日期），每次导出直接覆盖，便于反复对比
+        if file_path:
+            target = Path(file_path)
+        else:
+            suffix = "" if (lt == "2D" or hide_lens_edges) else "_edges"
+            target = out_dir / f"layout_{lt}{suffix}.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        layouts = None
+        for holder_name in ("Tools", None):
+            holder = getattr(system, holder_name, None) if holder_name else system
+            if holder is None:
+                continue
+            candidate = getattr(holder, "Layouts", None)
+            if candidate is not None:
+                layouts = candidate
+                break
+        if layouts is None:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "Layouts 接口不可用（system.Tools.Layouts 与 system.Layouts 都取不到），无法导出布局图",
+                },
+                ensure_ascii=False,
+            )
+
+        openers = (
+            ["Open3DViewerExport"]
+            if lt == "3D"
+            else ["OpenCrossSectionExport", "Open3DViewerExport"]
+        )
+        attempts: list[dict] = []
+        for opener in openers:
+            fn = getattr(layouts, opener, None)
+            if fn is None:
+                attempts.append({"opener": opener, "error": "接口不存在"})
+                continue
+            try:
+                exporter = fn()
+            except Exception as e:
+                attempts.append({"opener": opener, "error": f"调用失败: {e}"})
+                continue
+            if exporter is None:
+                attempts.append({"opener": opener, "error": "返回 None"})
+                continue
+            # 3D 视角控制（两种模式，互斥）：
+            #   1) view = isometric / xy / yz / xz → 调 SetCameraViewpoint 预设，忽略角度参数
+            #   2) view = current（默认）        → 不调预设，直接写 CameraViewpointAngleX/Y/Z
+            #      默认就是 0/0/0，即 Zemax 3D 布局的原始标准视角，与 GUI 里看到的一致
+            camera_report: dict[str, object] = {}
+            if lt == "3D":
+                preset = {"isometric": 0, "xy": 1, "yz": 2, "xz": 3}.get((view or "").lower())
+                if preset is not None:
+                    try:
+                        exporter.SetCameraViewpoint(preset)
+                        camera_report["preset"] = view.lower()
+                    except Exception as e:
+                        camera_report["preset_error"] = f"设置失败: {e}"
+                else:
+                    for attr, val in (
+                        ("CameraViewpointAngleX", float(angle_x)),
+                        ("CameraViewpointAngleY", float(angle_y)),
+                        ("CameraViewpointAngleZ", float(angle_z)),
+                    ):
+                        try:
+                            setattr(exporter, attr, val)
+                            camera_report[attr] = "ok"
+                        except Exception as e:
+                            camera_report[attr] = f"失败: {e}"
+                # 无论走哪条分支，都读回真实角度，便于核对出图到底用的什么视角
+                try:
+                    camera_report["readback_deg"] = {
+                        "x": round(float(exporter.CameraViewpointAngleX), 3),
+                        "y": round(float(exporter.CameraViewpointAngleY), 3),
+                        "z": round(float(exporter.CameraViewpointAngleZ), 3),
+                    }
+                except Exception as e:
+                    camera_report["readback_error"] = str(e)
+            try:
+                _delete_file_quietly(target)
+                num_surfaces = 0
+                try:
+                    num_surfaces = int(self.conn.lde.NumberOfSurfaces)
+                except Exception:
+                    pass
+
+                set_report: dict[str, str] = {}
+                for attr, val in (
+                    ("OutputFilename", str(target)),
+                    ("OutputFileName", str(target)),
+                    ("OutputPixelWidth", int(width)),
+                    ("OutputPixelHeight", int(height)),
+                    ("StartSurface", 1),
+                    ("EndSurface", max(2, num_surfaces - 1)),
+                    ("NumberOfRays", 7),
+                    ("Wavelength", -1),
+                    ("Field", -1),
+                    ("DeleteVignetted", True),
+                ):
+                    try:
+                        setattr(exporter, attr, val)
+                        set_report[attr] = "ok"
+                    except Exception as e:
+                        set_report[attr] = f"失败: {e}"
+
+                # 3D 专属：隐藏透镜边 / X 条，出图更干净（只留面形与光线）
+                # 2D 专属：加粗面线，便于判读
+                extra_props = (
+                    (
+                        ("HideLensEdges", bool(hide_lens_edges)),
+                        ("HideXBars", True),
+                    )
+                    if opener == "Open3DViewerExport"
+                    else (
+                        ("SurfaceLineThickness", 2),
+                        ("RaysLineThickness", 1),
+                    )
+                )
+                for attr, val in extra_props:
+                    try:
+                        setattr(exporter, attr, val)
+                        set_report[attr] = "ok"
+                    except Exception as e:
+                        set_report[attr] = f"失败: {e}"
+
+                triggers: list[str] = []
+                try:
+                    exporter.SaveImageAsFile = True
+                    triggers.append("SaveImageAsFile=True → ok")
+                except Exception as e:
+                    triggers.append(f"SaveImageAsFile=True → 失败: {e}")
+
+                # 关键：官方用法必须 RunAndWaitForCompletion 才会真正渲染并写盘
+                tool_base = None
+                try:
+                    tool_base = _cast_to_system_tool(exporter)
+                    tool_base.RunAndWaitForCompletion()
+                    triggers.append("RunAndWaitForCompletion → ok")
+                except Exception as e:
+                    triggers.append(f"RunAndWaitForCompletion → 失败: {e}")
+
+                # 等文件落盘（最多 3 秒）
+                for _ in range(30):
+                    if target.exists() and target.stat().st_size > 1024:
+                        break
+                    time.sleep(0.1)
+
+                readback: dict[str, object] = {}
+                for attr in ("OutputFilename", "OutputPixelWidth", "OutputPixelHeight"):
+                    try:
+                        readback[attr] = getattr(exporter, attr)
+                    except Exception as e:
+                        readback[attr] = f"读取失败: {e}"
+
+                if tool_base is not None:
+                    try:
+                        tool_base.Close()
+                        triggers.append("Close → ok")
+                    except Exception as e:
+                        triggers.append(f"Close → 失败: {e}")
+
+                kind = _classify_export_file(target)
+                size = target.stat().st_size if target.exists() else 0
+                is_image = kind in _VALID_ANALYSIS_IMAGE_KINDS
+                attempts.append(
+                    {
+                        "opener": opener,
+                        "path": str(target),
+                        "kind": kind,
+                        "bytes": size,
+                        "set_report": set_report,
+                        "readback": readback,
+                        "camera": camera_report,
+                        "triggers": triggers,
+                        "valid_image": is_image,
+                    }
+                )
+                if is_image:
+                    return json.dumps(
+                        {
+                            "ok": True,
+                            "layout_type": lt,
+                            "image_path": str(target),
+                            "kind": kind,
+                            "bytes": size,
+                            "pixels": f"{width}x{height}",
+                            "opener": opener,
+                            "window": window_action,
+                            "camera": camera_report,
+                            "attempts": attempts,
+                        },
+                        ensure_ascii=False,
+                    )
+                _delete_file_quietly(target)
+            except Exception as e:
+                attempts.append({"opener": opener, "error": str(e)})
+                _delete_file_quietly(target)
+
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "布局图位图导出失败：ZOS-API 导出接口未产出有效图片",
+                "attempts": attempts,
+            },
+            ensure_ascii=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4553,14 +5907,19 @@ def _attach_rendered_fallback_image(payload: dict, analysis_key: str) -> None:
     })
 
 
-def _render_spot_summary_png(spot_data: dict, path: Path, ray_points: dict | None = None) -> None:
+def _render_spot_summary_png(spot_data: dict, path: Path, ray_points: dict | None = None,
+                             airy_radius_mm: float | None = None,
+                             rms_um_by_field: dict | None = None,
+                             geo_um_by_field: dict | None = None) -> None:
     fields = spot_data.get("fields") or []
+    n_fields = max(1, len(fields))
     if len(fields) <= 3:
         width = 746
         height = 520
     else:
-        width = max(360, 245 * max(1, len(fields)))
-        height = 430
+        # 每格 250 内宽 + 左右各留 62 给轴刻度，避免首尾被裁掉
+        width = 124 + 250 * n_fields
+        height = 340
     canvas = _new_rgb_canvas(width, height, (255, 255, 255))
 
     all_geo = []
@@ -4580,12 +5939,11 @@ def _render_spot_summary_png(spot_data: dict, path: Path, ray_points: dict | Non
         panels = [(60, 50, 220, 210), (370, 50, 530, 210), (215, 285, 375, 445)][:len(fields)]
         legend_x, legend_y = 615, 14
     else:
-        panel_w = width / max(1, len(fields))
+        # 固定步距 250（内宽 200），首格从 62 开始，给两侧轴刻度留白
         panels = []
         for idx in range(len(fields)):
-            left = int(idx * panel_w + 24)
-            right = int((idx + 1) * panel_w - 24)
-            panels.append((left, 70, right, 260))
+            left = 62 + idx * 250
+            panels.append((left, 70, left + 200, 260))
         legend_x, legend_y = width - 120, 14
 
     _draw_text(canvas, 18, 12, "STANDARD SPOT - REAX REAY" if ray_points else "STANDARD SPOT - RMS GEO SUMMARY", (30, 30, 30), scale=2)
@@ -4617,11 +5975,28 @@ def _render_spot_summary_png(spot_data: dict, path: Path, ray_points: dict | Non
             scale_value, unit = ray_scale
             _draw_spot_axis_labels(canvas, left, top, right, bottom, scale_value, unit)
             _draw_spot_ray_points(canvas, ray_fields[field_id], left, top, right, bottom, colors, scale_value, geo_limits.get(field_id, {}))
+            # 艾里斑参考圆（对应 Zemax 点列图里的 Airy Disk 圈）
+            if airy_radius_mm and scale_value > 0:
+                half_w = max(1, (right - left) * 0.44)
+                half_h = max(1, (bottom - top) * 0.44)
+                r_px = int(round((airy_radius_mm / scale_value) * (half_w + half_h) / 2.0))
+                if r_px >= 1:
+                    _draw_circle(canvas, cx, cy, r_px, (255, 140, 0))
+                    _draw_text(canvas, left + 8, top + 6, "AIRY", (230, 110, 0), scale=1)
             image_y = _spot_field_image_coordinate(field, ray_fields[field_id])
             if image_y is not None:
                 _draw_text(canvas, left, bottom + 24, f"IMG {image_y:.3f} MM", (70, 70, 70), scale=1)
             display_scale = scale_value * 2000.0 if unit == "UM" else scale_value * 2.0
             _draw_text(canvas, left, bottom + 38, f"SCALE {_format_axis_value(display_scale)} {unit}", (70, 70, 70), scale=1)
+            # 每个视场的 RMS / GEO 数值（Zemax 原生点列图会在每格下方列这两项）
+            rms_um = (rms_um_by_field or {}).get(field_id)
+            geo_um = (geo_um_by_field or {}).get(field_id)
+            if rms_um is not None or geo_um is not None:
+                parts = [f"RMS {rms_um:.2f}" if rms_um is not None else "RMS -"]
+                if geo_um is not None:
+                    parts.append(f"GEO {geo_um:.2f}")
+                parts.append("UM")
+                _draw_text(canvas, left, bottom + 52, "  ".join(parts), (25, 25, 25), scale=1)
         else:
             _draw_text(canvas, left, bottom + 24, "RMS GEO", (70, 70, 70), scale=1)
             for wave_idx, wave in enumerate(field.get("waves") or []):
@@ -4819,6 +6194,44 @@ def _spot_geo_limits_by_field_wave(spot_data: dict) -> dict[int, dict[int, float
                 wave_limits[wave_id] = geo
         limits[field_id] = wave_limits
     return limits
+
+
+def _spot_radius_unit_factor(spot_data: dict, ray_points: dict | None) -> float:
+    """判断 spot_data 里 geo/rms 半径的实际单位，返回换算到 µm 的系数。
+
+    `*_lens_units` 这个键名并不可靠（可能已是 µm）。做法：用光线点算出的
+    真实最大半径（点坐标确定是 mm）当标尺，与 geo 最大值比比值——同量级即 mm。
+
+    Returns: 1.0 表示已是 µm；1000.0 表示是 mm。
+    """
+    try:
+        ref_max = 0.0
+        for field in (ray_points or {}).get("fields") or []:
+            for wave in field.get("waves") or []:
+                pts = wave.get("points") or []
+                if not pts:
+                    continue
+                rx = _finite_float(pts[0].get("x")) or 0.0
+                ry = _finite_float(pts[0].get("y")) or 0.0
+                for p in pts:
+                    x = _finite_float(p.get("x"))
+                    y = _finite_float(p.get("y"))
+                    if x is None or y is None:
+                        continue
+                    ref_max = max(ref_max, math.hypot(x - rx, y - ry))
+        geo_max = 0.0
+        for field in spot_data.get("fields") or []:
+            for wave in field.get("waves") or []:
+                g = _finite_float(wave.get("geo_radius_lens_units"))
+                if g is not None:
+                    geo_max = max(geo_max, abs(g))
+        if ref_max <= 0 or geo_max <= 0:
+            return 1.0
+        ratio = geo_max / ref_max
+        # geo 若与 mm 计的射线半径同量级 → 它是 mm，需要 ×1000 才是 µm
+        return 1000.0 if ratio < 50 else 1.0
+    except Exception:
+        return 1.0
 
 
 def _spot_ray_plot_scale(ray_points: dict | None, spot_data: dict | None = None):
@@ -5176,6 +6589,26 @@ def _finite_float(value):
     if not math.isfinite(number):
         return None
     return number
+
+
+def _set_field_vignetting(field_obj, vcx=None, vcy=None):
+    """在 IField 对象上设置渐晕压缩因子 VCX/VCY (0~1，1=无渐晕)。
+
+    属性名已在连接层探测确认为 VCX / VCY（_prop_map_put_ 可写）。
+    仅当传入值不为 None 时才写入，避免覆盖未指定的方向。
+    """
+    if field_obj is None:
+        return
+    if vcx is not None:
+        try:
+            setattr(field_obj, "VCX", float(vcx))
+        except Exception:
+            pass
+    if vcy is not None:
+        try:
+            setattr(field_obj, "VCY", float(vcy))
+        except Exception:
+            pass
 
 
 def _read_exported_text(path: str | None) -> str:

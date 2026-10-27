@@ -26,6 +26,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
 
 import argparse
+import importlib
 
 from dotenv import load_dotenv
 from mcp.server import Server
@@ -33,8 +34,12 @@ from mcp.server.stdio import stdio_server
 import mcp.types as types
 
 from zemax_connection import ZemaxConnection
-from tools import TOOL_DEFINITIONS, ZemaxToolkit
+import tools as _tools
 from logger import logger
+
+# 通过模块引用赋值，便于热加载后重新绑定
+TOOL_DEFINITIONS = _tools.TOOL_DEFINITIONS
+ZemaxToolkit = _tools.ZemaxToolkit
 
 # 加载 .env (API Key 对 MCP 服务器本身不需要，但 ZemaxConnection 可能用 ZEMAX_MODE 等)
 load_dotenv(_HERE / ".env")
@@ -47,6 +52,42 @@ _toolkit: ZemaxToolkit | None = None
 _zemax_mode: str = "extension"
 _instance: int = 0
 
+# ---------------------------------------------------------------------------
+#  tools.py 热加载：改完代码无需重启 WorkBuddy
+# ---------------------------------------------------------------------------
+
+_tools_mtime: float = 0.0
+
+
+def _maybe_reload_tools() -> None:
+    """检测 tools.py 是否被修改，若变了就地重新导入并绑定到现有实例。
+
+    这样改完 tools.py 后，下一次工具调用立即生效，不必重启客户端。
+    COM 连接挂在实例的 .conn 上，换类不影响它。
+    """
+    global TOOL_DEFINITIONS, ZemaxToolkit, _tools_mtime
+    try:
+        mtime = Path(_tools.__file__).stat().st_mtime
+    except Exception:
+        return
+    if _tools_mtime == 0.0:
+        _tools_mtime = mtime
+        return
+    if mtime == _tools_mtime:
+        return
+    _tools_mtime = mtime
+    try:
+        importlib.reload(_tools)
+        TOOL_DEFINITIONS = _tools.TOOL_DEFINITIONS
+        new_cls = _tools.ZemaxToolkit
+        ZemaxToolkit = new_cls
+        if _toolkit is not None:
+            # 就地换类，保留 conn 等实例属性
+            _toolkit.__class__ = new_cls
+        logger.info(f"tools.py 已热加载，工具数 {len(TOOL_DEFINITIONS)}")
+    except Exception as e:  # 热加载失败不影响服务，继续用旧代码
+        logger.error(f"tools.py 热加载失败，继续使用旧版本: {e}")
+
 server = Server("zemax-opticstudio")
 server.version = "1.0.0"
 
@@ -58,6 +99,7 @@ server.version = "1.0.0"
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
     """向 MCP 客户端声明所有可用的 Zemax 工具."""
+    _maybe_reload_tools()
     result = []
     for tool_def in TOOL_DEFINITIONS:
         fn = tool_def["function"]
@@ -86,6 +128,7 @@ async def list_tools() -> list[types.Tool]:
 async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
     """接收工具调用请求，路由到 ZemaxToolkit 执行."""
     global _toolkit
+    _maybe_reload_tools()
     if _toolkit is None:
         payload = json.dumps(
             {"error": "Zemax 连接尚未初始化。请确保以正确参数启动 MCP 服务器。"},

@@ -180,8 +180,12 @@ class ZemaxConnection:
         weight = _safe_get(field_obj, m.get("weight")) if m.get("weight") else _safe_get_multi(field_obj, ["Weight"])
         return x, y, weight
 
-    def set_field_data(self, field_obj, x=None, y=None, weight=None):
-        """安全设置 IField 的 x, y, weight."""
+    def set_field_data(self, field_obj, x=None, y=None, weight=None, vcx=None, vcy=None):
+        """安全设置 IField 的 x, y, weight 及渐晕因子 VCX/VCY.
+
+        vcx/vcy 为渐晕压缩因子 (0~1)：1 表示无渐晕，0.45 表示该方向
+        光线束被压缩到 45% (即拦掉 55% 的边缘光线)。
+        """
         m = self._prop_cache.get("IField", {})
         if x is not None:
             prop = m.get("x") or _find_prop(field_obj, ["X", "FieldX"]) or "X"
@@ -192,6 +196,12 @@ class ZemaxConnection:
         if weight is not None:
             prop = m.get("weight") or _find_prop(field_obj, ["Weight"]) or "Weight"
             _safe_set(field_obj, prop, weight)
+        if vcx is not None:
+            prop = _find_prop(field_obj, ["VCX", "vcx"]) or "VCX"
+            _safe_set(field_obj, prop, vcx)
+        if vcy is not None:
+            prop = _find_prop(field_obj, ["VCY", "vcy"]) or "VCY"
+            _safe_set(field_obj, prop, vcy)
 
     # ------------------------------------------------------------------
     #  连接状态检测与重连 (参考 PyZOS _PyZOSApp.connect.IsAlive)
