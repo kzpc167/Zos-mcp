@@ -247,11 +247,7 @@ C5 set_aperture(收紧一档) → 回 C2
 - `save_file()` **空参**会覆盖当前文档路径（可能写脏备份）→ 只用 `save_file(filename=正式路径)`。
 - `run_optimization` 自动落盘到**当前路径**，所以阶段存档靠「另存阶段名 → 再另存工作名」两次切回。
 - `clear_operands` / `run_optimization` / `edit_operand` / `remove_surface` 都会在 `<文件目录>/backups/` 生成备份；用户不要时完工后删除。
-- 本 skill 的三处路径（`.github/skills/`、`.workbuddy/skills/`、`.dsh/skills/`、`.claude/skills/`）是 **Windows 目录 Junction**，同一份物理文件。git 只跟踪 `.github/skills/`；**Junction 不会被 git 克隆出来**，新机器/新克隆必须手工重建（`cmd` 里执行，无需管理员）：
-  ```bat
-  mklink /J "D:\Zemax-mcp\.workbuddy\skills" "D:\Zemax-mcp\.github\skills"
-  mklink /J "D:\Zemax-mcp\.dsh\skills"      "D:\Zemax-mcp\.github\skills"
-  mklink /J "D:\Zemax-mcp\.claude\skills"   "D:\Zemax-mcp\.github\skills"
-  ```
-  验证：`dir /AL` 看到三行 `<JUNCTION>`，且各 agent 能列出项目级技能。并发写入无锁，改完立刻 commit。
+- **部署方式：把 skill 目录放进所用 agent 认的 skills 路径即可**（`.github/skills/`、`.workbuddy/skills/`、`.claude/skills/`、`.dsh/skills/` 中任意一个），复制或克隆都行，无额外步骤。
+- **本机把上述路径做成了 Windows 目录 Junction 指向 `.github/skills/`**，这只是「一份文件给多个 agent 共用、避免多份副本各自漂移」的**本机便利做法，不是部署前提**。换机器/新克隆**不需要复刻 junction**，直接放文件即可；若确实想让多个 agent 共用一份，才用 `mklink /J <agent路径> <本仓库.github/skills>` 建，并用 `dir /AL` 确认。
+- git 只跟踪 `.github/skills/`（`.workbuddy/`、`.dsh/`、`.claude/` 均在 `.gitignore`）。多 agent 并发写入**无文件锁**，以最后写入为准 → 改完立刻 commit，把窗口压到最短。
 - **改完本 skill 必须跑结构自检**：`python scripts/lint_skill.py`（校验跨文件 § 引用、编号连续性、SKILL.md ≤300 行、路由表文件存在）。返回 0 才算改完。
