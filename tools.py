@@ -69,6 +69,7 @@ TOOL_DEFINITIONS = [
             "description": (
                 "编辑指定表面的属性。只需提供要修改的参数，未提供的保持不变。"
                 "radius=1e18 表示平面 (Infinity)。"
+                "thickness 同样支持 1e15 表示无穷远（用于 OBJ 面设「物在无穷远」）。"
             ),
             "parameters": {
                 "type": "object",
@@ -1381,6 +1382,344 @@ TOOL_DEFINITIONS = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_all_figures",
+            "description": (
+                "【一键全量出图】把当前系统所有类型的验收图一次性导出到固定文件名（每类一份、覆盖式），\n"
+                "供一次查看全部。包含：2D 布局、3D 布局、点列图（含艾里斑）、净空剖面图，\n"
+                "以及全部分析图（像散/场曲+畸变、横向像差光扇、相对照度、波前图、纵向像差、横向色差）。\n"
+                "每个类型固定一个文件名（不带时间戳/步骤后缀），每次调用覆盖旧图，保证目录里每类只有一份。\n"
+                "返回所有图片路径清单，可直接用 present_files 一次性呈现。\n"
+                "内部严格串行执行（ZOS-API 单线程模型，不能并行）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_heavy": {
+                        "type": "boolean",
+                        "description": "是否包含波前图等较重分析，默认 true",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_temperature_configs",
+            "description": (
+                "【无热化】建立/配置温度组态（Multi-Configuration）。"
+                "无热化本质是把环境温度作为组态变量，用多个温度点分别追迹并联合优化。"
+                "本工具：1) 设置系统环境温度/气压；2) 建立若干温度组态（默认 -40/+25/+85℃ 三组）。"
+                "参数 temperatures：温度列表（℃，如 [-40, 25, 85]）。"
+                "镜筒/隔圈材料通过 barrel_material 传入（决定镜筒轴向热膨胀补偿，写入厚度热拾取求解）。"
+                "返回各组态的温度、以及是否成功应用温度。"
+                "注意：实际膨胀量由各面/各厚度的 Thermal Pickup solve 决定，本工具负责搭组态框架。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "temperatures": {
+                                                "type": "array",
+                                                "items": {
+                                                                "type": "number"
+                                                },
+                                                "description": "温度组态列表（℃），默认 [-40, 25, 85]"
+                                },
+                                "barrel_material": {
+                                                "type": "string",
+                                                "description": "镜筒/隔圈材料名（如 aluminum/铝合金/titanium/钛/plastic/塑料），决定镜筒热膨胀系数（默认 aluminum≈23.1ppm/℃）"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_thermal_pickup_solve",
+            "description": (
+                "【无热化】让指定面的半径/厚度随温度热胀（Make Thermal）。"
+                "实现方式：在 MCE 里建 CRVT(曲率)/THIC(厚度) 操作数(Param1=面号)，组态1写入当前基准值，"
+                "组态2..N 的同一单元格挂 Thermal Pickup solve（跟随组态1）。"
+                "膨胀量由该面玻璃材料自身的 TCE 与系统温度决定，不需要也不接受手写 TCE。"
+                "前置：先 set_temperature_configs 建好多温度组态；"
+                "给空气间隔做镜筒膨胀时同样调本工具，但需另行按镜筒 TCE 处理（见 skill 说明）。"
+                "参数：surface_number 面号；param radius/thickness；"
+                "**param=\"all\" 为批量模式**——一次给全系统所有面的半径/厚度建热缩放模型，"
+                "玻璃用自身 TCE、空气间隔用 tce 传入的隔圈 TCE（如铝 23.6），此时 surface_number 被忽略。"
+                "reference_surface 参考组态号(默认1)；tce 单面模式下已废弃，批量模式下作为隔圈 TCE。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "surface_number": {
+                                                "type": "integer",
+                                                "description": "目标面号"
+                                },
+                                "param": {
+                                                "type": "string",
+                                                "description": "目标参数：radius/thickness"
+                                },
+                                "reference_surface": {
+                                                "type": "integer",
+                                                "description": "参考组态号（默认 1，即跟随常温组态）。注意是组态不是面号。"
+                                },
+                                "tce": {
+                                                "type": "number",
+                                                "description": "已废弃，不影响结果（膨胀由玻璃材料 TCE 自动决定）。保留仅为兼容旧调用。"
+                                }
+                },
+                "required": [
+                                "surface_number",
+                                "param"
+                ]
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_thermal_model",
+            "description": (
+                "【无热化】一键建立全系统热弹性缩放模型，可指定隔圈（镜筒）热膨胀系数。"
+                "与 add_thermal_pickup_solve 的区别：Thermal Pickup 的膨胀由玻璃材料自身 TCE 决定，"
+                "无法给空气间隔指定镜筒 TCE；本工具改用 ConfigPickup + 精确 ScaleFactor，"
+                "使 组态c 的值 = 组态1值 × [1 + TCE × (T_c − T_ref)]。"
+                "玻璃面的半径/厚度用该片玻璃 TCE（GTCE 实测），空气间隔/像面距离用镜筒 TCE。"
+                "组态1 保持变量，优化时改动会自动传导到所有温度组态。"
+                "前置：先 set_temperature_configs 建好温度组态。"
+                "参数：tce_barrel 隔圈 TCE(ppm/℃，铝 23.6)；include_radius/include_thickness 是否建模半径/厚度；"
+                "reference_temperature 参考温度(默认25)；dry_run=true 只列计划不改系统。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tce_barrel": {
+                        "type": "number",
+                        "description": "隔圈/镜筒热膨胀系数 ppm/℃（铝 23.6，钛 8.6，因瓦 1.2）"
+                    },
+                    "include_radius": {
+                        "type": "boolean",
+                        "description": "是否为曲率半径建模（默认 true）"
+                    },
+                    "include_thickness": {
+                        "type": "boolean",
+                        "description": "是否为厚度建模（默认 true）"
+                    },
+                    "reference_temperature": {
+                        "type": "number",
+                        "description": "参考温度 ℃（默认 25）"
+                    },
+                    "clear_existing": {
+                        "type": "boolean",
+                        "description": "是否先删除 MCE 里已有的非 TEMP 操作数，避免重复（默认 true）"
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "只输出建模计划与玻璃 TCE，不修改系统（默认 false）"
+                    }
+                },
+                "required": []
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_thermal_glass_tce",
+            "description": (
+                "【无热化】批量读取当前系统所有玻璃的 TCE(热膨胀系数) 与 dn/dT 数据。"
+                "从系统数据读取各面材料的 GTCE 与温度折射率系数，输出玻璃清单表格，供无热化设计判断哪些玻璃对温度敏感、是否需替换。"
+                "可选参数 report_only：true 仅读取报告（默认）；false 暂无写入行为（预留）。"
+                "返回逐面材料 + TCE + dn/dT 清单。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "report_only": {
+                                                "type": "boolean",
+                                                "description": "仅读取报告（默认 true）"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "optimize_athermal",
+            "description": (
+                "【无热化】多组态联合优化：让各温度组态下的像质同时达标。"
+                "在已建立温度组态 + 热拾取求解的前提下，运行优化（DLS 或 Hammer），评价函数会覆盖所有组态，使镜头在全温范围内保持像质稳定。"
+                "参数：algorithm(DLS/Hammer)、cycles、duration_seconds；可选 target_defocus_compensation：是否把后焦距作为补偿器变量（电焦/机械调焦行程）。"
+                "返回优化前后评价函数与各温度下的后焦距漂移。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "algorithm": {
+                                                "type": "string",
+                                                "description": "DLS 或 Hammer（默认 DLS）"
+                                },
+                                "cycles": {
+                                                "type": "string",
+                                                "description": "Automatic 或具体循环数"
+                                },
+                                "duration_seconds": {
+                                                "type": "integer",
+                                                "description": "Hammer 运行时长（秒）"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_thermal_defocus",
+            "description": (
+                "【无热化】读取各温度组态下的后焦距(BFL)漂移，输出无热化验收曲线。"
+                "依次切换每个温度组态，读取系统后焦距（像面到最后一面的距离），输出温度-离焦表，判断是否满足无热化要求（如全温离焦 < 景深）。"
+                "返回：各温度组态的 BFL、相对常温的离焦量(μm)、最大离焦跨度。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_tolerances",
+            "description": (
+                "【公差分析】按车规量产等级写入公差（TDE 公差数据编辑器）。"
+                "使用序列公差向导(SEQToleranceWizard)按等级批量设置：曲率(光圈)、厚度、偏心、倾斜、折射率/阿贝数、表面不规则度。"
+                "grade 等级：loose(松)/medium(中，推荐)/tight(紧)。"
+                "中等公差参考值：曲率±3~5光圈、厚度±0.02~0.05mm、偏心±0.02mm、倾斜±1′、折射率±0.001、阿贝数±0.5%、不规则度±1光圈。"
+                "返回写入的各公差项汇总。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "grade": {
+                                                "type": "string",
+                                                "description": "公差等级：loose/medium/tight（默认 medium）"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tolerance_sensitivity",
+            "description": (
+                "【公差分析】运行灵敏度分析：逐项评估每项公差对像质的单独贡献。"
+                "在已设置公差后，运行 Tolerancing Analysis（灵敏度模式），输出每项公差导致的像质劣化排序（最敏感项在前），用于识别关键公差。"
+                "criterion：评价指标（默认 RMS spot radius，单位 μm）。"
+                "返回：各项公差的灵敏度贡献、最差公差项。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "criterion": {
+                                                "type": "string",
+                                                "description": "评价指标，默认 RMS spot radius"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tolerance_monte_carlo",
+            "description": (
+                "【公差分析】运行蒙特卡洛分析：随机抽样数百次装配，输出良率分布。"
+                "在公差已设置后运行蒙特卡洛，统计各样本像质，给出良率、均值、标准差、最差样本等统计量，判断是否满足量产良率要求（如 90% 良率）。"
+                "trials：抽样次数（默认 200）。criterion：评价指标。"
+                "返回：良率、统计分布、最差样本像质。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "trials": {
+                                                "type": "integer",
+                                                "description": "蒙特卡洛抽样次数（默认 200）"
+                                },
+                                "criterion": {
+                                                "type": "string",
+                                                "description": "评价指标，默认 RMS spot radius"
+                                }
+                },
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_tolerance_report",
+            "description": (
+                "【公差分析】汇总公差分析结果：灵敏度 + 蒙特卡洛 + 补偿器综合报告。"
+                "读取最近一次公差分析的结果数据（良率、最差公差项、CPK 等），输出结构化的公差验收报告，判断设计是否满足量产公差要求。"
+                "返回：公差设置摘要、灵敏度最差项、蒙特卡洛良率、结论建议。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_tolerance_compensator",
+            "description": (
+                "【公差分析】设置补偿器（装配补偿）：把某个厚度/空气间隔作为装配补偿变量。"
+                "典型补偿器是后焦距(BFL)——装配时通过调焦补偿公差误差。"
+                "参数：surface_number 补偿面号（通常像面）；param 补偿参数（默认 thickness）；min/max 补偿行程范围（mm，如 -0.2~+0.2）。"
+                "返回补偿器设置结果。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                                "surface_number": {
+                                                "type": "integer",
+                                                "description": "补偿面号（通常像面）"
+                                },
+                                "param": {
+                                                "type": "string",
+                                                "description": "补偿参数（默认 thickness）"
+                                },
+                                "min": {
+                                                "type": "number",
+                                                "description": "补偿行程下限（mm，默认 -0.2）"
+                                },
+                                "max": {
+                                                "type": "number",
+                                                "description": "补偿行程上限（mm，默认 0.2）"
+                                }
+                },
+                "required": [
+                                "surface_number"
+                ]
+},
+        },
+    },
+
 ]
 
 
@@ -1753,8 +2092,21 @@ class ZemaxToolkit:
             changed.append("radius=Infinity" if rval == float("inf") else f"radius={kwargs['radius']}")
 
         if "thickness" in kwargs and kwargs["thickness"] is not None:
-            surf.Thickness = float(kwargs["thickness"])
-            changed.append(f"thickness={kwargs['thickness']}")
+            traw = kwargs["thickness"]
+            if isinstance(traw, str):
+                ttoken = traw.strip().lower()
+                if ttoken in ("infinity", "infinite", "inf", "∞"):
+                    tval = float("inf")
+                else:
+                    tval = float(traw)
+            else:
+                tval = float(traw)
+                # 与 radius 同规则：≥1e15 视为无穷远（OBJ 面即"物在无穷远"），
+                # 不留一个巨大数值把布局图尺度撑爆
+                if abs(tval) >= 1e15:
+                    tval = float("inf")
+            surf.Thickness = tval
+            changed.append("thickness=Infinity" if tval == float("inf") else f"thickness={kwargs['thickness']}")
 
         if "material" in kwargs and kwargs["material"] is not None:
             surf.Material = str(kwargs["material"])
@@ -3582,10 +3934,11 @@ class ZemaxToolkit:
             row = _refetch_last_row(mfe) or row
             _safe_set_attr(row, "Weight", 0.0)
             _safe_set_attr(row, "Target", 0.0)
-            _wave_actual = max(1, wave_param) if wave_param > 0 else primary_wave_idx
-            field_norm = field_norms.get(field_idx, 0.0)
-            _write_mtf_operand_params(row, _wave_actual, float(frequency), field_norm)
-            added.append((label, field_idx, _safe(mfe, "NumberOfOperands", 0), operand_name, field_norm))
+            # MTFT/MTFS 视场号：Hx 字段，1-based（1=轴上, 2=第二视场...）
+            # wave: 0=多色（与 get_mtf 的 wave 参数一致，0 表多色）
+            field_number = field_idx  # field_idx 已是 1-based
+            _write_mtf_operand_params(row, field_number, float(frequency), wave=wave_param, sampling=1)
+            added.append((label, field_idx, _safe(mfe, "NumberOfOperands", 0), operand_name, field_number))
 
         for fi in range(1, num_fields + 1):
             if type_val_mtft is not None:
@@ -3684,7 +4037,7 @@ class ZemaxToolkit:
 
         result = {
             "frequency_cycles_per_mm": frequency,
-            "operand_mapping": "MTFT/MTFS reference-style: Int1=wave, Int2=0, Param3=sampling, Param4=frequency, Param6=normalized_field",
+            "operand_mapping": "MTFT/MTFS correct layout: Int1=sampling(1=32x32), Int2=wave(0=polychromatic), Hx=field(1-based), Hy=frequency(lp/mm)",
             "image_na": image_na,
             "cutoff_frequency": cutoff_freq,
             "diffraction_limit_mtf": diffraction_limit_mtf,
@@ -3914,8 +4267,8 @@ class ZemaxToolkit:
                 row = _refetch_last_row(mfe) or row
                 _safe_set_attr(row, "Weight", 0.0)
                 _safe_set_attr(row, "Target", 0.0)
-                _set_operand_int_param(row, 1, wave_param)
-                _write_mtf_operand_params(row, wave_param, float(freq), field_norms.get(fi, 0.0))
+                # 正确映射：Int1=采样, Int2=波长, Hx=视场号, Hy=频率
+                _write_mtf_operand_params(row, fi, float(freq), wave=wave, sampling=1)
                 added.append((label, fi, _safe(mfe, "NumberOfOperands", 0)))
 
             for fi in range(1, num_fields + 1):
@@ -3992,7 +4345,7 @@ class ZemaxToolkit:
             "image_na": image_na,
             "cutoff_frequency": cutoff_freq,
             "primary_wavelength_um": primary_wave_um,
-            "operand_mapping": "MTFT/MTFS reference-style: Int1=wave, Int2=0, Param3=sampling, Param4=frequency, Param6=normalized_field",
+            "operand_mapping": "MTFT/MTFS correct layout: Int1=sampling(1=32x32), Int2=wave(0=polychromatic), Hx=field(1-based), Hy=frequency(lp/mm)",
             "num_fields": num_fields,
             "worst_field": worst_field,
             "curve": curve_data,
@@ -4115,34 +4468,94 @@ class ZemaxToolkit:
             result["warnings"] = sorted(set(result.get("warnings", []) + [
                 "存在 RMS/GEO 全 0 的点列图视场；若相对照度也为 0，应判定为空视场而非优秀像质。"
             ]))
+        # 附带权威艾里斑半径（1.22·λ·F#，与 Zemax 图一致）与各视场 RMS/艾里 倍数，
+        # 避免下游脚本各自硬编码 F 数而算出偏大的圈。
+        airy = self._airy_radius_um()
+        if airy:
+            result["airy_radius_um"] = airy
+            for item in result.get("fields", []):
+                rms = item.get("rms_radius_um") or item.get("rms_radius_lens_units")
+                try:
+                    rms_f = abs(float(rms))
+                except (TypeError, ValueError):
+                    continue
+                item["vs_airy"] = round(rms_f / airy, 3)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     def _airy_radius_um(self) -> float | None:
-        """艾里斑半径 (μm) = 0.61·λ/NA，与 Zemax 图中标注的 Airy 半径一致。
+        """艾里斑半径 (μm) = 1.22·λ·F#（F# = EFFL/EPD），与 Zemax 图中标注的 Airy 半径一致。
 
         近轴关系 NA = sin(atan(EPD / (2·EFFL)))。注意用 sin 而非 tan：
         常见的 1.22·λ·(EFFL/EPD) 写法等价于用 tan，会比 Zemax 的 NA 偏大，
         导致艾里半径偏小（实测 1.667 vs 1.705 μm）。
+
+        ★ 2026-10-29 修正两个叠加 bug（曾把本例算成 6.4358 μm，真值 ≈1.00 μm）：
+
+        bug 1：`Aperture.ApertureValue` 在 **ImageSpaceFNumber** 类型下返回的是
+               **F 数**（本例 1.4），不是 EPD（应为 EFFL/F# = 10.84 mm）。
+               直接当 EPD 会让分母缩到 1/7.8，NA 小 7.8 倍、艾里半径大 7.8 倍。
+               → 必须按 ApertureType 换算。
+
+        bug 2：原按 Weight 选"权重大"的波长写法在实际判断里是 `w > best`，
+               当所有权重都是 1.0 时，只有第 1 个波长满足 `1.0 > -1.0`，
+               之后 `1.0 > 1.0` 恒 False → **永远取第 1 个波长**。
+               本例第 1 个是 0.486（F 线），主波长却是 0.588（d 线）。
+               → 必须用 `IsPrimary`。
         """
         try:
             wls = self.conn.system_data.Wavelengths
             lam = None
-            best_weight = -1.0
+            # 优先主波长（IsPrimary），拿不到再退回第 1 个
             for i in range(1, int(wls.NumberOfWavelengths) + 1):
                 w = wls.GetWavelength(i)
-                weight = float(getattr(w, "Weight", 1.0) or 1.0)
-                if weight > best_weight:
-                    best_weight = weight
+                if bool(getattr(w, "IsPrimary", False)):
                     lam = float(w.Wavelength)
-            epd = float(self.conn.system.SystemData.Aperture.ApertureValue)
+                    break
+            if lam is None and int(wls.NumberOfWavelengths) >= 1:
+                lam = float(wls.GetWavelength(1).Wavelength)
+
             first_order = json.loads(self.get_first_order_data())
             effl = float(first_order["first_order_data"]["EFFL"]["value"])
-            if not (lam and epd > 0 and effl > 0):
+
+            aperture = self.conn.system.SystemData.Aperture
+            try:
+                atype = int(aperture.ApertureType)
+            except Exception:
+                atype = -1
+            avalue = float(aperture.ApertureValue)
+
+            # ZemaxApertureType: 0=EPD 1=ImageSpaceFNumber 2=ObjectSpaceFNumber
+            #                    3=FloatByStopSize 4=ParaxialWorkingFNumber 5=ObjectSpaceNA
+            epd = None
+            if atype == 0:
+                epd = avalue                      # 本身就是 EPD (镜头单位)
+            elif atype in (1, 4):
+                epd = (effl / avalue) if avalue > 0 else None   # 像方/近轴工作 F 数
+            elif atype == 2:
+                epd = (effl / avalue) if avalue > 0 else None   # 物方 F 数，近轴近似
+            elif atype == 3:
+                # 浮于光阑尺寸：入瞳直径取物面半口径×2（Zemax 会自动填）
+                try:
+                    sd0 = float(self.conn.system.SystemData.LDE.GetSurfaceAt(0).SemiDiameter)
+                    epd = sd0 * 2.0 if sd0 > 0 else None
+                except Exception:
+                    epd = None
+            elif atype == 5:
+                # 物方 NA：EPD ≈ 2·f·tan(asin(NA))，近轴下即 2·f·NA
+                epd = 2.0 * effl * avalue if avalue > 0 else None
+            else:
+                # 未知类型：按 F 数尽力换算
+                epd = (effl / avalue) if avalue > 0 else None
+
+            if not (lam and epd and epd > 0 and effl > 0):
                 return None
-            na = math.sin(math.atan(epd / (2.0 * effl)))
-            if na <= 0:
+            # Zemax 点列图 Airy 圈的定义就是 r = 1.22·λ·F#，F# = EFFL/EPD。
+            # 不要用 0.61·λ/sin(atan(epd/2/effl))：那等于用真实 NA 反推，
+            # 会比 Zemax 的口径小 6% 左右（本例 1.066 vs 1.005），圈画大了。
+            fno = effl / epd
+            if fno <= 0:
                 return None
-            return round(0.61 * lam / na, 4)
+            return round(1.22 * lam * fno, 4)
         except Exception:
             return None
 
@@ -4151,7 +4564,7 @@ class ZemaxToolkit:
         """把点列图渲染成 PNG（固定文件名、覆盖保存），并叠加艾里斑参考圆。
 
         ZOS-API 的分析类没有位图导出接口，因此按真实光线落点自行渲染；
-        艾里斑半径按 0.61·λ/NA 计算，与 Zemax 图中 Airy Disk 圈一致。
+        艾里斑半径按 1.22·λ·F#（F# = EFFL/EPD）计算，与 Zemax 图中 Airy Disk 圈一致。
         """
         settings = {
             "field": 0,
@@ -4271,7 +4684,7 @@ class ZemaxToolkit:
                 "fields": summary,
                 "note": (
                     "ZOS-API 无分析位图导出，图像由真实光线落点渲染；"
-                    "每格下方列出 RMS / GEO 半径（µm）与标尺；艾里斑按 0.61·λ/NA 绘制（与 Zemax 一致）。"
+                    "每格下方列出 RMS / GEO 半径（µm）与标尺；艾里斑按 1.22·λ·F#（F#=EFFL/EPD）绘制（与 Zemax 一致）。"
                 ),
             },
             ensure_ascii=False,
@@ -4379,6 +4792,87 @@ class ZemaxToolkit:
             report["summary"].append("未发现自动化硬失败；仍需结合图像和设计指标判断是否收敛。")
         return json.dumps(report, ensure_ascii=False, indent=2)
 
+    def export_all_figures(self, include_heavy: bool = True) -> str:
+        """一键全量出图：把当前系统所有验收图导出到固定文件名（覆盖式），返回路径清单。
+
+        设计目标：每个图类型只保留一份（固定文件名、不带时间戳/步骤后缀），
+        一次调用产出全套图，供 present_files 一次性查看。内部严格串行（ZOS-API 单线程）。
+
+        出图类型（6 类，全部输出到 layouts 根目录）：
+        2D 布局、3D 布局、点列图（含艾里斑）、净空剖面、横向像差光扇、MTF 曲线。
+        """
+        figures: list[dict] = []
+        errors: list[dict] = []
+
+        def _record(name: str, payload: dict, key: str = "image_path") -> None:
+            if not isinstance(payload, dict):
+                errors.append({"figure": name, "error": f"非预期返回: {payload!r}"})
+                return
+            if payload.get("ok") is False or payload.get("error"):
+                errors.append({"figure": name, "error": payload.get("error") or "返回 ok=False"})
+                return
+            # 分析类返回里图片路径在 exports.image_path（嵌套），布局/点列图在顶层 image_path
+            exports = payload.get("exports") if isinstance(payload.get("exports"), dict) else {}
+            path = (payload.get(key)
+                    or payload.get("export_path")
+                    or payload.get("image_path")
+                    or exports.get("image_path"))
+            if path and str(path).lower().endswith((".png", ".bmp", ".jpg", ".jpeg")):
+                figures.append({"type": name, "path": str(path)})
+            else:
+                figures.append({"type": name, "path": str(path) if path else None,
+                                "note": payload.get("note") or exports.get("image_export_note") or "未取得有效图片路径"})
+
+        # 统一输出目录：全部图都放在 layouts 根目录（不再用 analysis 子目录）
+        current_file = self._current_system_file()
+        layouts_root = str(current_file.parent / "layouts") if current_file else str(_WORKSPACE_ROOT / "layouts")
+
+        # 1) 2D / 3D 布局图（固定文件名，覆盖式）
+        for lt in ("2D", "3D"):
+            try:
+                _record(f"layout_{lt}",
+                        json.loads(self.export_layout_image(layout_type=lt, width=1600, height=700 if lt == "2D" else 1000)))
+            except Exception as e:
+                errors.append({"figure": f"layout_{lt}", "error": str(e)})
+
+        # 2) 点列图（含艾里斑）
+        try:
+            _record("spot_diagram", json.loads(self.export_spot_diagram_image(show_airy=True)))
+        except Exception as e:
+            errors.append({"figure": "spot_diagram", "error": str(e)})
+
+        # 3) 净空剖面图
+        try:
+            _record("clearance_check", json.loads(self.check_interference(save_image=True)), key="schematic")
+        except Exception as e:
+            errors.append({"figure": "clearance_check", "error": str(e)})
+
+        # 4) 横向像差光扇（输出到 layouts 根目录）
+        try:
+            _record("ray_fan", self._run_analysis_capture(
+                "ray_fan", export_basename="ray_fan", export_dir=layouts_root))
+        except Exception as e:
+            errors.append({"figure": "ray_fan", "error": str(e)})
+
+        # 5) MTF 曲线（FFT MTF，输出到 layouts 根目录）
+        try:
+            _record("fft_mtf", self._run_analysis_capture(
+                "fft_mtf", export_basename="fft_mtf", export_dir=layouts_root))
+        except Exception as e:
+            errors.append({"figure": "fft_mtf", "error": str(e)})
+
+        return json.dumps(
+            {
+                "ok": not errors,
+                "figures": figures,
+                "errors": errors,
+                "count": len(figures),
+                "directory": layouts_root,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
     def _fan_analysis_json(self, analysis_key: str, field: int, wave: int, number_of_rays: int | None) -> str:
         settings = {"field": int(field or 0), "wave": int(wave or 0)}
         if number_of_rays is not None:
@@ -4398,7 +4892,7 @@ class ZemaxToolkit:
     def _run_analysis_capture(self, analysis_key: str, settings_overrides: dict | None = None,
                               export_basename: str | None = None, keep_window: bool = False,
                               export_image: bool = True, export_text: bool = True,
-                              max_points: int = 2000) -> dict:
+                              max_points: int = 2000, export_dir: str | None = None) -> dict:
         """Create/apply an Analysis and capture structured results, text, and export files."""
         system = self.conn.system
         analyses = getattr(system, "Analyses", None)
@@ -4435,7 +4929,7 @@ class ZemaxToolkit:
             except Exception:
                 results = None
 
-            export_paths = self._export_analysis_outputs(analysis, results, export_basename or canonical, export_image, export_text)
+            export_paths = self._export_analysis_outputs(analysis, results, export_basename or canonical, export_image, export_text, export_dir=export_dir)
             payload = {
                 "ok": True,
                 "analysis": canonical,
@@ -4466,17 +4960,21 @@ class ZemaxToolkit:
                     pass
 
     def _export_analysis_outputs(self, analysis, results, basename: str,
-                                 export_image: bool, export_text: bool) -> dict:
+                                 export_image: bool, export_text: bool,
+                                 export_dir: str | None = None) -> dict:
         current_file = self._current_system_file()
         base_dir = current_file.parent if current_file else _WORKSPACE_ROOT
-        export_dir = base_dir / "layouts" / "analysis"
+        if export_dir:
+            export_dir = Path(export_dir)
+        else:
+            export_dir = base_dir / "layouts" / "analysis"
         export_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in basename)
         export_info: dict[str, object] = {"directory": str(export_dir)}
 
+        # 固定文件名（不带时间戳），每次导出覆盖旧图，保证每个分析类型只有一份
         if export_text and results is not None:
-            text_path = export_dir / f"{safe_name}_{timestamp}.txt"
+            text_path = export_dir / f"{safe_name}.txt"
             try:
                 ok = results.GetTextFile(str(text_path))
                 export_info["text_path"] = str(text_path)
@@ -4485,7 +4983,7 @@ class ZemaxToolkit:
                 export_info["text_export_error"] = str(e)
 
         if export_image:
-            export_info.update(_export_verified_analysis_image(analysis, export_dir, f"{safe_name}_{timestamp}"))
+            export_info.update(_export_verified_analysis_image(analysis, export_dir, safe_name))
         return export_info
 
     def _attach_spot_ray_trace_points(self, payload: dict, rings: int = 4) -> None:
@@ -4936,6 +5434,2185 @@ class ZemaxToolkit:
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    # ------------------------------------------------------------------
+    #  无热化 (Athermalization) — 多组态 + 热拾取求解 + 多温优化
+    # ------------------------------------------------------------------
+    def _get_thermal_pressure(self):
+        """读取/返回环境温度与气压对象 (ISystemData.TemperaturePressure)."""
+        try:
+            sd = self.conn.system_data
+            tp = _safe(sd, "TemperaturePressure", None)
+            return tp
+        except Exception:
+            return None
+
+    def _get_current_temperature(self) -> float | None:
+        tp = self._get_thermal_pressure()
+        if tp is None:
+            return None
+        return _jsonable_number(_safe(tp, "Temperature", None))
+
+    def _set_environment_temperature(self, temp_c: float) -> bool:
+        tp = self._get_thermal_pressure()
+        if tp is None:
+            return False
+        return _safe_set_attr(tp, "Temperature", float(temp_c))
+
+    def _mce(self):
+        """多组态编辑器 (IMultiConfigurationEditor)."""
+        return _safe(self.conn.system, "MCE", None)
+
+    def set_temperature_configs(self, temperatures: list | None = None, barrel_material: str = "aluminum") -> str:
+        temps = list(temperatures) if temperatures else [-40.0, 25.0, 85.0]
+        temps = [float(t) for t in temps]
+        if not temps:
+            temps = [25.0]
+
+        barrel_tce_map = {
+            "aluminum": 23.1, "al": 23.1, "铝合金": 23.1, "铝": 23.1,
+            "titanium": 8.6, "ti": 8.6, "钛": 8.6,
+            "steel": 11.7, "stainless": 11.7, "钢": 11.7,
+            "plastic": 60.0, "塑料": 60.0,
+            "invar": 1.2, "因瓦": 1.2,
+        }
+        barrel_key = str(barrel_material if barrel_material is not None else "aluminum").strip().lower()
+        barrel_tce = barrel_tce_map.get(barrel_key)
+        if barrel_tce is None:
+            # 支持直接传数值（ppm/℃），如 "23.6" / 23.6
+            try:
+                barrel_tce = float(barrel_key)
+            except (TypeError, ValueError):
+                barrel_tce = 23.1
+
+        # 会话态缓存：MCE 读不到时作为兜底（真源仍是 MCE）
+        self._thermal_temps = temps
+        self._thermal_barrel_tce = barrel_tce
+
+        result: dict[str, object] = {
+            "temperatures": temps,
+            "reference_temperature": 25.0,
+            "barrel_material": barrel_material,
+            "barrel_tce_ppm": barrel_tce,
+            "configs": [],
+            "notes": [],
+            "attempts": [],
+        }
+        attempts: list[str] = result["attempts"]  # type: ignore[assignment]
+
+        # 1) 读当前环境温度
+        cur_temp = self._get_current_temperature()
+        result["current_environment_temperature"] = cur_temp
+        if cur_temp is None:
+            result["notes"].append("未能读取 SystemData.TemperaturePressure（API 版本差异），环境温度设置可能不可用。")
+
+        # 2) 真正建立 MCE 组态（2026-10-31 修复：原实现不写 MCE，只回显 dict）
+        mce = self._mce()
+        if mce is None:
+            result["ok"] = False
+            result["mce_available"] = False
+            result["error"] = "system.MCE 不可用，无法建立温度组态。"
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        result["mce_available"] = True
+        try:
+            n_cfg_before = int(mce.NumberOfConfigurations)
+            result["existing_configurations"] = n_cfg_before
+        except Exception as e:
+            result["ok"] = False
+            result["error"] = f"读取组态数失败: {e}"
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        warn_restore = "本操作会重建温度组态；如原有非温度组态（变焦/多结构）需自行恢复。"
+
+        # 2a) 组态数不足 → 增
+        guard = 0
+        n_cfg = n_cfg_before
+        while n_cfg < len(temps) and guard < 25:
+            ok_add = False
+            for desc, fn in (
+                ("AddConfiguration(False)", lambda: mce.AddConfiguration(False)),
+                ("AddConfiguration()", lambda: mce.AddConfiguration()),
+                (f"InsertConfiguration({n_cfg + 1},False)", lambda: mce.InsertConfiguration(n_cfg + 1, False)),
+            ):
+                try:
+                    fn()
+                    attempts.append(f"OK {desc}")
+                    ok_add = True
+                    break
+                except Exception as e:
+                    attempts.append(f"FAIL {desc}: {e}")
+            if not ok_add:
+                break
+            n_cfg = int(mce.NumberOfConfigurations)
+            guard += 1
+
+        # 2b) 组态数过多 → 删
+        guard = 0
+        while n_cfg > len(temps) and guard < 25:
+            try:
+                mce.DeleteConfiguration(n_cfg)
+                attempts.append(f"OK DeleteConfiguration({n_cfg})")
+            except Exception as e:
+                attempts.append(f"FAIL DeleteConfiguration({n_cfg}): {e}")
+                break
+            n_cfg = int(mce.NumberOfConfigurations)
+            guard += 1
+
+        result["configurations_after_resize"] = n_cfg
+        if n_cfg != len(temps):
+            result["notes"].append(f"组态数 {n_cfg} 与温度点数 {len(temps)} 不一致，后续写入可能不完整。")
+
+        # 3) 找到或创建 TEMP 操作数
+        tid, tid_src = self._mce_temp_operand_type()
+        result["temp_operand_type_id"] = tid
+        result["temp_operand_type_source"] = tid_src
+
+        temp_row = None
+        temp_op = None
+        try:
+            n_op = int(mce.NumberOfOperands)
+        except Exception:
+            n_op = 0
+
+        for r in range(1, n_op + 1):
+            try:
+                op = mce.GetOperandAt(r)
+            except Exception:
+                continue
+            typ = _safe(op, "Type", None)
+            is_temp = False
+            if typ is not None:
+                if tid is not None:
+                    try:
+                        is_temp = int(typ) == int(tid)
+                    except Exception:
+                        is_temp = False
+                if not is_temp:
+                    is_temp = "TEMP" in str(typ).upper()
+            if is_temp:
+                temp_row, temp_op = r, op
+                break
+
+        if temp_op is None:
+            if tid is None:
+                result["ok"] = False
+                result["error"] = "无法探测 TEMP 操作数枚举值，且现有 MCE 中无 TEMP 行。"
+                result["notes"].append("请在 OpticStudio GUI 的 MCE 里手动插入一行 Type=TEMP，再重试。")
+                return json.dumps(result, ensure_ascii=False, indent=2)
+            try:
+                mce.InsertNewOperandAt(1)
+                temp_row = 1
+                temp_op = mce.GetOperandAt(1)
+                attempts.append("OK InsertNewOperandAt(1)")
+            except Exception as e:
+                result["ok"] = False
+                result["error"] = f"InsertNewOperandAt 失败: {e}"
+                return json.dumps(result, ensure_ascii=False, indent=2)
+            try:
+                temp_op.ChangeType(tid)
+                attempts.append(f"OK ChangeType({tid})")
+            except Exception as e:
+                attempts.append(f"FAIL ChangeType({tid}): {e}")
+        result["temp_operand_row"] = temp_row
+
+        # 4) 逐组态写温度并校验 read_back（吸取 MTFT「写了没报错但值不对」的教训）
+        written = []
+        for idx, t in enumerate(temps, start=1):
+            entry = {"config": idx, "requested_c": t, "ok": False}
+            try:
+                cell = temp_op.GetOperandCell(idx)
+            except Exception as e:
+                entry["error"] = f"GetOperandCell 失败: {e}"
+                written.append(entry)
+                continue
+            mode_used = None
+            for mode in ("double", "value", "int"):
+                try:
+                    if mode == "double":
+                        cell.DoubleValue = float(t)
+                        rb = _safe(cell, "DoubleValue", None)
+                    elif mode == "value":
+                        cell.Value = str(t)
+                        rb = _safe(cell, "DoubleValue", None)
+                        if rb is None:
+                            rb = _safe(cell, "Value", None)
+                    else:
+                        cell.IntegerValue = int(round(t))
+                        rb = _safe(cell, "DoubleValue", None)
+                        if rb is None:
+                            rb = _safe(cell, "IntegerValue", None)
+                    if _readback_matches(rb, t):
+                        mode_used = mode
+                        entry.update({"ok": True, "read_back": rb, "mode": mode})
+                        break
+                    entry["last_read_back"] = rb
+                except Exception as e:
+                    entry["error"] = str(e)
+            if not entry["ok"] and mode_used is None:
+                entry.setdefault("error", "写入后 read_back 与请求值不符")
+            written.append(entry)
+
+        result["configs"] = written
+        all_ok = all(c.get("ok") for c in written) and len(written) == len(temps)
+        result["ok"] = bool(all_ok)
+
+        # 5) 镜筒热膨胀参考量
+        result["barrel_expansion_reference"] = [
+            {
+                "temperature_c": t,
+                "delta_from_reference": round(t - 25.0, 2),
+                "barrel_delta_length_ppm": round((t - 25.0) * barrel_tce, 2),
+            }
+            for t in temps
+        ]
+
+        # 6) 回读 MCE，确认真源已生效
+        mce_temps = self._mce_temperatures()
+        result["mce_readback_temperatures"] = mce_temps
+        if mce_temps and [round(x, 3) for x in mce_temps] != [round(x, 3) for x in temps]:
+            result["ok"] = False
+            result["notes"].append(f"MCE 回读温度 {mce_temps} 与请求 {temps} 不一致。")
+
+        if not all_ok:
+            result["notes"].append("部分温度写入未通过 read_back 校验，详见 configs 中 ok=false 的条目。")
+        result["warning"] = warn_restore
+        result["next_step"] = (
+            "组态已建立。接着用 add_thermal_pickup_solve 逐面挂热拾取求解"
+            "（半径/玻璃厚度用玻璃 TCE，空气间隔/像面用镜筒 TCE），"
+            "再 optimize_athermal 多温联合优化，最后 get_thermal_defocus 验收。"
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _solve_type_candidates(self, keyword: str = "thermal") -> list[tuple[str, int]]:
+        """扫描 COM 常量表里含关键词的 SolveType 枚举 → [(name, id)]。"""
+        out: list[tuple[str, int]] = []
+        try:
+            for nm in dir(self.conn.constants):
+                low = nm.lower()
+                if keyword in low and ("solve" in low):
+                    v = _safe(self.conn.constants, nm, None)
+                    if v is None:
+                        continue
+                    try:
+                        out.append((nm, int(v)))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return out
+
+    def _probe_constant_names(self, keyword: str = "solve") -> list[str]:
+        """诊断用：列出常量表里含关键词的成员名（不含值）。"""
+        out: list[str] = []
+        try:
+            for nm in dir(self.conn.constants):
+                if keyword.lower() in nm.lower():
+                    out.append(nm)
+        except Exception:
+            pass
+        return out[:200]
+
+    def _find_thermal_pickup_solve_id(self, cell, max_id: int = 60) -> tuple[int | None, str]:
+        """探测 ThermalPickup 的 SolveType 枚举值。
+
+        判据不用 Type 名称（win32com 下读回多为数字或空），而是看 solve 对象
+        是否暴露 `_S_ThermalPickup` 子接口——这是 ZOS-API 对每种 solve 的唯一标识。
+        CreateSolveType 不写回单元格，因此逐个试无副作用。
+        """
+        for sid in range(0, max_id + 1):
+            try:
+                s = cell.CreateSolveType(sid)
+            except Exception:
+                continue
+            try:
+                sub = getattr(s, "_S_ThermalPickup", None)
+                if sub is not None:
+                    _ = sub.Configuration   # 确认可访问
+                    return sid, f"sid={sid} 暴露 _S_ThermalPickup"
+            except Exception:
+                continue
+        return None, "0~%d 内未找到暴露 _S_ThermalPickup 的 solve" % max_id
+
+    def add_thermal_pickup_solve(self, surface_number: int, param: str,
+                                 reference_surface: int | None = None, tce: float = 7.1) -> str:
+        """在 MCE 上为该面的半径/厚度挂 Thermal Pickup 求解（Make Thermal）。
+
+        2026-10-31 重构：**原实现把 solve 挂错了地方**——挂在 LDE 单元格上。
+        Zemax 官方 Example 18「Make Thermal」的正确做法是：
+
+          1. MCE 里建 CRVT（曲率）/ THIC（厚度）操作数，Param1 = 面号
+          2. 组态 1 放基准值（曲率或厚度）
+          3. 组态 2..N 的**同一个操作数单元格**挂 ThermalPickup solve
+          4. solve 的参数是 `Configuration`（跟随哪个组态），**不是 TCE**
+          5. 全局开关 `SystemData.Environment.AdjustIndexToEnvironment = true`
+
+        这样温度变化时，该面的半径/厚度按材料 TCE 与温度自动缩放。
+
+        ⚠️ `tce` 参数已废弃（仅为兼容旧调用保留）：热膨胀由玻璃材料自身的
+        TCE 决定，不看这个入参。`reference_surface` 复用为「参考组态号」，默认 1。
+        """
+        mce = self._mce()
+        if mce is None:
+            return json.dumps({
+                "ok": False,
+                "error": "system.MCE 不可用，无法挂 MCE 级热拾取",
+            }, ensure_ascii=False, indent=2)
+
+        param_l = (param or "").strip().lower()
+
+        # 批量模式：param="all" → 建全系统热弹性缩放模型（可指定隔圈 TCE）
+        if param_l in ("all", "system", "批量"):
+            return self.build_thermal_model(tce_barrel=float(tce if tce and tce > 1 else 23.6))
+
+        # 主动调焦模式：param="focus" → 逐组态把像面拉回焦点，给调焦行程 + 调后 MTF
+        # 注：此模式下 tce 复用为 MTF 评估频率(lp/mm)，surface_number = 调焦面号（通常是像面前一段空气）
+        if param_l in ("focus", "调焦", "autofocus"):
+            freq = float(tce) if tce and tce >= 10 else 120.0
+            return self._apply_thermal_focus(
+                surface_number=int(surface_number or 18),
+                mtf_frequency=freq,
+                only_config=(int(reference_surface) if reference_surface else None),
+            )
+
+        # 诊断模式：param="diag" → 打印 MFE 操作数上与组态相关的成员（排查「全组态同值」）
+        if param_l in ("diag", "诊断"):
+            mfe = self.conn.mfe
+            out: dict[str, object] = {"ok": True}
+            try:
+                row = mfe.GetOperandAt(1)
+                members = [m for m in dir(row) if not m.startswith("__")]
+                out["row_members"] = members
+                out["config_like"] = {
+                    m: str(_safe(row, m, "<unreadable>"))[:40]
+                    for m in members if "config" in m.lower()
+                }
+            except Exception as e:
+                out["row_error"] = str(e)
+            try:
+                mce = self._mce()
+                out["mce_config_methods"] = [m for m in dir(mce) if "onfig" in m]
+                cur = None
+                for nm in ("GetCurrentConfiguration", "CurrentConfiguration", "CurrentConfigurationNumber"):
+                    v = _safe(mce, nm, None)
+                    if v is not None:
+                        cur = (nm, str(v)[:30])
+                        break
+                out["current_config_read"] = cur
+            except Exception as e:
+                out["mce_error"] = str(e)
+            return json.dumps(out, ensure_ascii=False, indent=2)
+
+        # 判定模式：param="verdict" → 逐温度三条判据（离焦出界 / 边缘 MTF / 点列图 RMS）
+        if param_l in ("verdict", "判定", "判据"):
+            freq = float(tce) if tce and tce >= 10 else 120.0
+            return self._thermal_verdict(focus_surface=int(surface_number or 18),
+                                         mtf_frequency=freq)
+
+        # 清理模式：param="cleanup" → 从 MFE 末尾删除 surface_number 行（修临时行残留）
+        if param_l in ("cleanup", "清理"):
+            n = int(surface_number or 0)
+            mfe = self.conn.mfe
+            before = int(_safe(mfe, "NumberOfOperands", 0))
+            removed = 0
+            for _ in range(max(0, n)):
+                cur = int(_safe(mfe, "NumberOfOperands", 0))
+                if cur <= 1:
+                    break
+                try:
+                    mfe.DeleteOperandAt(cur)
+                    removed += 1
+                    continue
+                except Exception:
+                    pass
+                try:
+                    mfe.RemoveOperandAt(cur)
+                    removed += 1
+                except Exception:
+                    break
+            after = int(_safe(mfe, "NumberOfOperands", 0))
+            return json.dumps({
+                "ok": removed > 0,
+                "removed": removed,
+                "before": before,
+                "after": after,
+                "note": "只从末尾删除，用于清理临时探测行（RAID/MTFT 等）。",
+            }, ensure_ascii=False, indent=2)
+
+        # 硬指标模式：param="metrics" → 逐组态实测 TOTR / 畸变 / 相对照度 / CRA
+        if param_l in ("metrics", "硬指标", "hard"):
+            return self._hard_metrics_scan(
+                only_config=(int(reference_surface) if reference_surface else None))
+
+        # 检查模式：param="check" → 切到组态 surface_number，报告 LDE 实际厚度与 MTF        # 用途：判定「切组态是否真的改了 LDE」与「MTF 是否随组态变化」，排查全组态同值
+        if param_l in ("check", "检查"):
+            cfg = int(surface_number or 1)
+            mce = self._mce()
+            if mce is None:
+                return json.dumps({"ok": False, "error": "system.MCE 不可用"}, ensure_ascii=False)
+            okc, how = self._set_current_config(mce, cfg)
+            freq = float(tce) if tce and tce >= 10 else 120.0
+            lde = self.conn.lde
+            th: dict[str, object] = {}
+            for i in (1, 17, 18):
+                try:
+                    th[str(i)] = round(float(_safe(lde.GetSurfaceAt(i), "Thickness", 0) or 0), 6)
+                except Exception:
+                    th[str(i)] = None
+            dist = self._read_image_distance()
+            try:
+                payload = json.loads(self.get_mtf(frequency=freq))
+            except Exception as e:
+                payload = {"error": str(e)}
+            fft_summary = None
+            try:
+                fft = json.loads(self.get_fft_mtf_vs_field(frequencies=[freq]))
+                fft_summary = fft.get("mtf_vs_field_summary")
+            except Exception as e:
+                fft_summary = {"error": str(e)}
+            spot_rms = {}
+            try:
+                sp = json.loads(self.get_spot_diagram_data())
+                for item in (sp.get("fields") or []):
+                    spot_rms[str(item.get("field"))] = item.get("rms_radius_um") or item.get("rms_radius_lens_units")
+            except Exception as e:
+                spot_rms = {"error": str(e)}
+            self._set_current_config(mce, 1)
+            return json.dumps({
+                "ok": True,
+                "config": cfg,
+                "switch_via": how,
+                "lde_thickness_mm": th,
+                "image_distance_mm": dist,
+                "temperature_from_mce_probe": None,
+                "mtf_at_frequency": freq,
+                "mtf_fields": payload.get("fields"),
+                "mtf_error": payload.get("error"),
+                "fft_mtf_vs_field_summary": fft_summary,
+                "spot_rms_um": spot_rms,
+            }, ensure_ascii=False, indent=2)
+
+        op_name = {"radius": "CRVT", "thickness": "THIC"}.get(param_l)
+        if not op_name:
+            return json.dumps({
+                "ok": False,
+                "error": f"不支持的参数: {param}（仅 radius/thickness）",
+            }, ensure_ascii=False)
+
+        op_type_id = _safe(self.conn.constants, f"MultiConfigOperandType_{op_name}", None)
+        if op_type_id is None:
+            return json.dumps({
+                "ok": False,
+                "error": f"常量表里找不到 MultiConfigOperandType_{op_name}",
+                "hint": "请在 MCE 手工插入一行 Type=%s、Param1=%d 后重试。" % (op_name, surface_number),
+            }, ensure_ascii=False, indent=2)
+        op_type_id = int(op_type_id)
+
+        ref_cfg = int(reference_surface) if reference_surface is not None else 1
+        try:
+            n_cfg = int(mce.NumberOfConfigurations)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"读组态数失败: {e}"}, ensure_ascii=False)
+
+        if n_cfg < 2:
+            return json.dumps({
+                "ok": False,
+                "error": "只有 1 个组态，挂 Thermal Pickup 无意义",
+                "hint": "先运行 set_temperature_configs 建立 -40/25/85 三组态。",
+            }, ensure_ascii=False, indent=2)
+
+        attempts: list[str] = []
+
+        # --- 1) 找到或创建 MCE 操作数（Type=CRVT/THIC, Param1=面号）---
+        target_op = None
+        target_row = None
+        try:
+            n_op = int(mce.NumberOfOperands)
+        except Exception:
+            n_op = 0
+
+        for r in range(1, n_op + 1):
+            try:
+                op = mce.GetOperandAt(r)
+            except Exception:
+                continue
+            typ = _safe(op, "Type", None)
+            p1 = _safe(op, "Param1", None)
+            try:
+                if typ is not None and int(typ) == op_type_id and p1 is not None and int(p1) == int(surface_number):
+                    target_op, target_row = op, r
+                    break
+            except (TypeError, ValueError):
+                continue
+
+        created_row = False
+        if target_op is None:
+            try:
+                mce.AddOperand()
+                target_row = int(mce.NumberOfOperands)
+                target_op = mce.GetOperandAt(target_row)
+                target_op.ChangeType(op_type_id)
+                target_op.Param1 = int(surface_number)
+                created_row = True
+                attempts.append(f"新建 MCE 操作数 row={target_row} Type={op_name} Param1={surface_number}")
+            except Exception as e:
+                return json.dumps({
+                    "ok": False,
+                    "error": f"创建 MCE 操作数失败: {e}",
+                    "attempts": attempts,
+                }, ensure_ascii=False, indent=2)
+
+        # --- 2) 组态 1 写入 LDE 当前值作为基准 ---
+        base_value = None
+        try:
+            surf = self.conn.lde.GetSurfaceAt(surface_number)
+            if param_l == "thickness":
+                base_value = float(_safe(surf, "Thickness", 0.0) or 0.0)
+            else:
+                r = float(_safe(surf, "Radius", 0.0) or 0.0)
+                base_value = (1.0 / r) if abs(r) > 1e-12 else 0.0
+            target_op.GetOperandCell(1).DoubleValue = base_value
+            attempts.append(f"组态1 基准值 {op_name}={base_value:.6g}")
+        except Exception as e:
+            attempts.append(f"写组态1 基准值失败: {e}")
+
+        # --- 3) 探测 ThermalPickup 的 solve 枚举 ---
+        try:
+            probe_cell = target_op.GetOperandCell(1)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"取单元格失败: {e}"}, ensure_ascii=False)
+
+        sid, how = self._find_thermal_pickup_solve_id(probe_cell)
+        if sid is None:
+            return json.dumps({
+                "ok": False,
+                "error": "未找到 ThermalPickup 的 SolveType 枚举值",
+                "probe": how,
+                "hint": "该 win32com 包装可能未导出 _S_ThermalPickup；"
+                        "可先尝试清 gen_py 缓存重建包装，或手工在 MCE 单元格的 Solve 列选 Thermal Pickup。",
+                "attempts": attempts,
+            }, ensure_ascii=False, indent=2)
+
+        # --- 4) 给组态 2..N 挂 solve ---
+        applied = []
+        for c in range(2, n_cfg + 1):
+            entry = {"config": c, "ok": False}
+            try:
+                cell = target_op.GetOperandCell(c)
+                solve = cell.CreateSolveType(sid)
+                solve._S_ThermalPickup.Configuration = ref_cfg
+                cell.SetSolveData(solve)
+                # 校验：读回能否拿到 _S_ThermalPickup
+                ok = False
+                try:
+                    back = cell.GetSolveData()
+                    ok = getattr(back, "_S_ThermalPickup", None) is not None
+                except Exception:
+                    ok = False
+                entry["ok"] = bool(ok)
+            except Exception as e:
+                entry["error"] = str(e)
+            applied.append(entry)
+
+        ok_count = sum(1 for a in applied if a.get("ok"))
+
+        # --- 5) 打开 AdjustIndexToEnvironment（温度影响折射率的全局开关）---
+        adjust_set = False
+        try:
+            env = _safe(_safe(self.conn.system, "SystemData", None), "Environment", None)
+            if env is not None:
+                adjust_set = _safe_set_attr(env, "AdjustIndexToEnvironment", True)
+        except Exception:
+            pass
+
+        return json.dumps({
+            "ok": ok_count == len(applied) and ok_count > 0,
+            "surface": surface_number,
+            "param": param_l,
+            "mce_operand": op_name,
+            "mce_row": target_row,
+            "created_row": created_row,
+            "base_value": base_value,
+            "reference_config": ref_cfg,
+            "solve_type_id": sid,
+            "solve_detected_by": how,
+            "applied": applied,
+            "applied_count": ok_count,
+            "adjust_index_to_environment": adjust_set,
+            "attempts": attempts,
+            "note": (
+                "热拾取挂在 MCE 组态 2..N 的单元格上，跟随组态 1 的基准值随温度缩放；"
+                "膨胀量由玻璃材料自身 TCE 决定（不是入参 tce）。"
+                "空气间隔要跟镜筒膨胀，需对空气层厚度单独按镜筒 TCE 处理（见 skill 说明）。"
+            ),
+        }, ensure_ascii=False, indent=2)
+    def _find_solve_id_by_attr(self, cell, attr_name: str, max_id: int = 60) -> int | None:
+        """按 solve 的子接口名探测 SolveType 枚举值（Type 名称在 win32com 下读不出）。"""
+        for sid in range(0, max_id + 1):
+            try:
+                s = cell.CreateSolveType(sid)
+            except Exception:
+                continue
+            try:
+                if getattr(s, attr_name, None) is not None:
+                    return sid
+            except Exception:
+                continue
+        return None
+
+    def _probe_glass_tce_map(self) -> dict[int, float]:
+        """用 GTCE 操作数探测每片玻璃的 TCE（ppm/℃），读完清理临时行。"""
+        mfe = self.conn.mfe
+        lde = self.conn.lde
+        out: dict[int, float] = {}
+        if mfe is None:
+            return out
+        inserted: list[int] = []
+        try:
+            for i in range(1, lde.NumberOfSurfaces):
+                mat = str(_safe(lde.GetSurfaceAt(i), "Material", "") or "").strip()
+                if not mat or mat in ("-", "MIRROR", "ABSORB"):
+                    continue
+                try:
+                    payload = json.loads(self.add_operand("GTCE", target=0.0, weight=0.0, int1=i))
+                except Exception:
+                    continue
+                if payload.get("row"):
+                    inserted.append(int(payload["row"]))
+                try:
+                    out[i] = float(payload.get("current_value"))
+                except (TypeError, ValueError):
+                    pass
+        finally:
+            for r in sorted(set(inserted), reverse=True):
+                try:
+                    mfe.RemoveOperandAt(r)
+                except Exception:
+                    pass
+        return out
+
+    def build_thermal_model(self, tce_barrel: float = 23.6,
+                            include_radius: bool = True,
+                            include_thickness: bool = True,
+                            reference_temperature: float = 25.0,
+                            clear_existing: bool = True,
+                            dry_run: bool = False) -> str:
+        """【无热化】一键建立全系统热弹性缩放模型（Make Thermal，可指定隔圈 TCE）。
+
+        与 `add_thermal_pickup_solve` 的区别：Thermal Pickup 的膨胀由**玻璃材料自身 TCE**
+        决定，无法给空气间隔指定镜筒 TCE。本工具改用 **ConfigPickup + 精确 ScaleFactor**：
+
+            Cell(config c) = Cell(config 1) × [1 + TCE × (T_c − T_ref)]
+
+        玻璃面的半径/厚度用该片玻璃 TCE（GTCE 实测），
+        空气间隔/像面距离用镜筒（隔圈）TCE。组态 1 仍是变量，
+        所以优化时改组态 1 的值会自动传导到所有温度组态。
+        """
+        mce = self._mce()
+        if mce is None:
+            return json.dumps({"ok": False, "error": "system.MCE 不可用"}, ensure_ascii=False)
+
+        temps = self._configured_temperatures()
+        try:
+            n_cfg = int(mce.NumberOfConfigurations)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"读组态数失败: {e}"}, ensure_ascii=False)
+        n_use = min(len(temps), n_cfg)
+        if n_use < 2:
+            return json.dumps({
+                "ok": False,
+                "error": "温度组态不足 2 个",
+                "hint": "先 set_temperature_configs 建立温度组态。",
+            }, ensure_ascii=False, indent=2)
+        temps = temps[:n_use]
+
+        crvt_id = _safe(self.conn.constants, "MultiConfigOperandType_CRVT", None)
+        thic_id = _safe(self.conn.constants, "MultiConfigOperandType_THIC", None)
+        if crvt_id is None or thic_id is None:
+            return json.dumps({
+                "ok": False,
+                "error": "找不到 MultiConfigOperandType_CRVT / THIC 常量",
+            }, ensure_ascii=False, indent=2)
+        crvt_id, thic_id = int(crvt_id), int(thic_id)
+
+        lde = self.conn.lde
+        num = lde.NumberOfSurfaces
+        glass_tce = self._probe_glass_tce_map()
+
+        # 清理已有的非 TEMP 操作数，避免重复行互相打架
+        removed_rows = 0
+        if clear_existing:
+            tid, _ = self._mce_temp_operand_type()
+            for r in range(int(mce.NumberOfOperands), 0, -1):
+                try:
+                    op = mce.GetOperandAt(r)
+                except Exception:
+                    continue
+                typ = _safe(op, "Type", None)
+                is_temp = False
+                if typ is not None and tid is not None:
+                    try:
+                        is_temp = int(typ) == int(tid)
+                    except (TypeError, ValueError):
+                        is_temp = False
+                if not is_temp:
+                    try:
+                        mce.RemoveOperandAt(r)
+                        removed_rows += 1
+                    except Exception:
+                        pass
+
+        plans: list[dict] = []
+        for i in range(1, num - 1):
+            surf = lde.GetSurfaceAt(i)
+            mat = str(_safe(surf, "Material", "") or "").strip()
+            is_glass = bool(mat) and mat not in ("-", "MIRROR", "ABSORB")
+
+            if include_radius:
+                try:
+                    rv = float(_safe(surf, "Radius", 0) or 0)
+                except (TypeError, ValueError):
+                    rv = 0.0
+                if 1e-9 < abs(rv) < 1e9:
+                    tce = glass_tce.get(i) or glass_tce.get(i - 1) or 7.0
+                    plans.append({
+                        "surface": i, "op": "CRVT", "op_id": crvt_id,
+                        "base": 1.0 / rv, "tce": round(tce, 3),
+                        "medium": "glass",
+                    })
+            if include_thickness:
+                try:
+                    tv = float(_safe(surf, "Thickness", 0) or 0)
+                except (TypeError, ValueError):
+                    tv = 0.0
+                if 0 < abs(tv) < 1e6:
+                    tce = (glass_tce.get(i) or 7.0) if is_glass else float(tce_barrel)
+                    plans.append({
+                        "surface": i, "op": "THIC", "op_id": thic_id,
+                        "base": tv, "tce": round(tce, 3),
+                        "medium": "glass" if is_glass else "air",
+                    })
+
+        if not plans:
+            return json.dumps({"ok": False, "error": "没有可建模的面/参数"}, ensure_ascii=False)
+
+        if dry_run:
+            return json.dumps({
+                "ok": True,
+                "dry_run": True,
+                "temperatures": temps,
+                "barrel_tce": tce_barrel,
+                "planned_operands": len(plans),
+                "glass_tce": {str(k): v for k, v in glass_tce.items()},
+                "plans": plans[:80],
+            }, ensure_ascii=False, indent=2)
+
+        # --- 1) 建 MCE 操作数并写组态 1 基准值 ---
+        created: list[dict] = []
+        for p in plans:
+            try:
+                mce.AddOperand()
+                row = int(mce.NumberOfOperands)
+                op = mce.GetOperandAt(row)
+                op.ChangeType(p["op_id"])
+                op.Param1 = int(p["surface"])
+                op.GetOperandCell(1).DoubleValue = float(p["base"])
+                created.append({**p, "row": row, "op_obj": op})
+            except Exception as e:
+                p["error"] = str(e)
+
+        if not created:
+            return json.dumps({"ok": False, "error": "一条 MCE 操作数都没建成", "plans": plans[:20]},
+                              ensure_ascii=False, indent=2)
+
+        # --- 2) 组态 2..N 直接写入按 TCE 缩放后的值 ---
+        # 注：曾试 ConfigPickup+ScaleFactor，实测语义与预期不符（组态2 值崩到基准的 2%），
+        # 故改为直接写硬值：value = base × [1 + TCE×(T−Tref)]。数值完全可控、可复核。
+        applied = 0
+        failures: list[dict] = []
+        for item in created:
+            op = item["op_obj"]
+            try:
+                for c in range(2, n_use + 1):
+                    dT = float(temps[c - 1]) - float(reference_temperature)
+                    scale = 1.0 + float(item["tce"]) * 1e-6 * dT
+                    val = float(item["base"]) * scale
+                    op.GetOperandCell(c).DoubleValue = float(val)
+                    applied += 1
+                item["example_last_value"] = round(
+                    float(item["base"]) * (1.0 + float(item["tce"]) * 1e-6
+                                           * (float(temps[-1]) - float(reference_temperature))), 8)
+                item.pop("op_obj", None)
+            except Exception as e:
+                failures.append({"row": item.get("row"), "surface": item.get("surface"),
+                                 "param": item.get("op"), "error": str(e)})
+                item.pop("op_obj", None)
+
+        # --- 4) 打开折射率随温度调整的全局开关 ---
+        adjust_set = False
+        try:
+            env = _safe(self.conn.system_data, "Environment", None)
+            if env is not None:
+                adjust_set = _safe_set_attr(env, "AdjustIndexToEnvironment", True)
+        except Exception:
+            pass
+
+        return json.dumps({
+            "ok": len(failures) == 0,
+            "reference_temperature": reference_temperature,
+            "temperatures": temps,
+            "barrel_tce_ppm": float(tce_barrel),
+            "write_mode": "direct_value (base × [1+TCE×ΔT])",
+            "removed_existing_operands": removed_rows,
+            "operands_created": len(created),
+            "cells_applied": applied,
+            "failures": failures or None,
+            "adjust_index_to_environment": adjust_set,
+            "glass_tce_used": {str(k): v for k, v in glass_tce.items()},
+            "sample": [
+                {k: v for k, v in it.items() if k in ("row", "surface", "op", "medium", "tce", "base")}
+                for it in created[:12]
+            ],
+            "note": (
+                "各组态为按公式直接写入的硬值（不挂 solve），数值可逐格复核。"
+                "玻璃用自身 TCE，空气间隔用镜筒 TCE。"
+                "⚠️ 硬值不随组态1联动：优化改动了组态1 之后必须重跑本工具刷新其余组态。"
+                "务必用 get_thermal_defocus 确认全温位移量级合理（30mm 系统/铝镜筒约 ±30µm）。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def _apply_thermal_focus(self, surface_number: int = 18,
+                             mtf_frequency: float = 120.0,
+                             only_config: int | None = None,
+                             scan_step_um: float = 40.0) -> str:
+        """【无热化·主动调焦】用原生 FFT MTF 逐组态**扫描出真正的最佳焦面**。
+
+        2026-10-31 两处重大认知修正（都是实测撞出来的）：
+
+        1) **「第一面到像面」的累计距离 ≠ 热离焦**。
+           各组态按 TCE 缩放后，累计距离只是几何量；把 sensor 拉回累计距离原位，
+           等于人为制造离焦（实测 125℃ 轴上 MTF 从 0.44 崩到 0.037）。
+           真实离焦是「镜筒决定的 sensor 位置」与「光学焦点位置」的失配：
+               δ(T) = ΔT × Σt_glass × (α_barrel − α_glass)
+           本例 ΔT=100℃ → 100 × 20.36mm × (23.6−6.5)ppm ≈ 34.8µm。
+           ⇒ 对焦必须**以像质为判据实测**，不能拿几何距离回零当成功。
+
+        2) **get_mtf（MTFT/MTFS 操作数）在多组态下只返回组态 1 的值**。
+           实测 10 个组态 MTF 逐位相同（0.4357/0.315/0.4521…），而同一时刻
+           spot RMS 与 LDE 厚度都随组态在变（3.80 → 5.47µm）。
+           ⇒ 多组态 MTF 验收**必须走原生分析** `get_fft_mtf_vs_field`。
+
+        做法：以当前 MCE 值为中心，在 ±scan_step_um 内取 3 点测轴上 MTF，
+        抛物线拟合求峰值 → 写入最佳值 → 记录调焦量与全视场 MTF。
+        """
+        mce = self._mce()
+        if mce is None:
+            return json.dumps({"ok": False, "error": "system.MCE 不可用"}, ensure_ascii=False, indent=2)
+
+        temps = self._configured_temperatures()
+        try:
+            n_cfg = int(mce.NumberOfConfigurations)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"读组态数失败: {e}"}, ensure_ascii=False)
+        n_use = min(len(temps), n_cfg)
+        if n_use < 2:
+            return json.dumps({"ok": False, "error": "温度组态不足 2 个"}, ensure_ascii=False, indent=2)
+        temps = temps[:n_use]
+
+        thic_id = _safe(self.conn.constants, "MultiConfigOperandType_THIC", None)
+        if thic_id is None:
+            return json.dumps({"ok": False, "error": "常量表找不到 MultiConfigOperandType_THIC"},
+                              ensure_ascii=False, indent=2)
+        thic_id = int(thic_id)
+
+        focus_op = None
+        for r in range(1, int(_safe(mce, "NumberOfOperands", 0)) + 1):
+            try:
+                cand = mce.GetOperandAt(r)
+            except Exception:
+                continue
+            try:
+                if int(_safe(cand, "Type", -1)) == thic_id and int(_safe(cand, "Param1", -1)) == int(surface_number):
+                    focus_op = cand
+                    break
+            except (TypeError, ValueError):
+                continue
+        if focus_op is None:
+            return json.dumps({
+                "ok": False,
+                "error": f"MCE 里没有面 {surface_number} 的 THIC 操作数",
+                "hint": "先跑 add_thermal_pickup_solve(param='all') 建热模型。",
+            }, ensure_ascii=False, indent=2)
+
+        freq = float(mtf_frequency)
+        step = abs(float(scan_step_um)) / 1000.0   # mm
+
+        def _axis_t() -> float | None:
+            """当前组态的轴上（field 1）切向 MTF —— 走原生 FFT MTF vs Field。"""
+            try:
+                d = json.loads(self.get_fft_mtf_vs_field(frequencies=[freq]))
+                flds = d["mtf_vs_field_summary"]["frequencies"][0]["fields"]
+                for item in flds:
+                    if int(item.get("field", 0)) == 1:
+                        return float(item["T"])
+                return float(flds[0]["T"])
+            except Exception:
+                return None
+
+        def _focus_metric() -> float | None:
+            """对焦判据：全视场 RMS 半径的均方根（越小越好）。
+
+            用 point spread 的 RMS 而非 MTF 做对焦判据：MTF 在 120lp/mm 处随
+            焦面 1µm 级变动会跳变（实测 0.9µm 差 10%），曲面过尖，抛物线拟合不可靠；
+            RMS 半径随离焦平滑变化，才是 Zemax 里「最佳焦面」的标准定义。
+            """
+            try:
+                d = json.loads(self.get_spot_diagram_data())
+                vals = []
+                for item in (d.get("fields") or []):
+                    v = item.get("rms_radius_um") or item.get("rms_radius_lens_units")
+                    try:
+                        fv = float(v)
+                    except (TypeError, ValueError):
+                        continue
+                    if fv > 0:
+                        vals.append(fv * fv)
+                if not vals:
+                    return None
+                return (sum(vals) / len(vals)) ** 0.5
+            except Exception:
+                return None
+
+        def _full_mtf() -> dict:
+            try:
+                d = json.loads(self.get_fft_mtf_vs_field(frequencies=[freq]))
+                flds = d["mtf_vs_field_summary"]["frequencies"][0]["fields"]
+                return {
+                    "fields": [{"field": f.get("field"), "T": f.get("T"), "S": f.get("S")} for f in flds],
+                    "min_TS": min([min(f.get("T") or 9, f.get("S") or 9) for f in flds], default=None),
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        targets = [int(only_config)] if only_config else list(range(1, n_use + 1))
+
+        # 组态 1 的名义值（行程基准）
+        self._set_current_config(mce, 1)
+        try:
+            t_nominal = float(focus_op.GetOperandCell(1).DoubleValue)
+        except Exception:
+            t_nominal = None
+
+        rows: list[dict] = []
+        for c in targets:
+            ok, how = self._set_current_config(mce, c)
+            if not ok:
+                rows.append({"config": c, "error": "切换组态失败"})
+                continue
+            temp_c = temps[c - 1]
+            try:
+                t_cur = float(focus_op.GetOperandCell(c).DoubleValue)
+            except Exception as e:
+                rows.append({"config": c, "error": f"读单元格失败: {e}"})
+                continue
+
+            cell = focus_op.GetOperandCell(c)
+            scan: list[dict] = []
+            for dx in (-step, 0.0, step):
+                try:
+                    cell.DoubleValue = float(t_cur + dx)
+                except Exception as e:
+                    scan.append({"offset_um": round(dx * 1000, 2), "error": str(e)})
+                    continue
+                scan.append({
+                    "offset_um": round(dx * 1000, 2),
+                    "thic_mm": round(t_cur + dx, 6),
+                    "focus_rms_um": _focus_metric(),
+                })
+
+            ys = [(s.get("focus_rms_um")) for s in scan]
+            t_opt = t_cur
+            fit = "no_fit"
+            if all(y is not None for y in ys) and len(ys) == 3:
+                y0, y1, y2 = [float(y) for y in ys]
+                denom = y0 - 2.0 * y1 + y2
+                if abs(denom) > 1e-6:
+                    xstar = 0.5 * step * (y0 - y2) / denom    # 极小值顶点
+                    xstar = max(-step, min(step, xstar))       # 限制在扫描区间内
+                    t_opt = t_cur + xstar
+                    fit = "parabola_min"
+            if t_opt != t_cur:
+                try:
+                    cell.DoubleValue = float(t_opt)
+                except Exception:
+                    t_opt = t_cur
+
+            mtf = _full_mtf()
+            rows.append({
+                "config": c,
+                "temperature_c": temp_c,
+                "thic_scan_center_mm": round(t_cur, 6),
+                "scan": scan,
+                "fit": fit,
+                "thic_best_mm": round(t_opt, 6),
+                "focus_travel_um": (round((t_opt - t_nominal) * 1000.0, 3)
+                                    if t_nominal is not None else None),
+                "mtf_after_focus": mtf,
+                "switch_via": how,
+            })
+
+        self._set_current_config(mce, 1)
+
+        travels = [r["focus_travel_um"] for r in rows if r.get("focus_travel_um") is not None]
+        min_ts = [r["mtf_after_focus"]["min_TS"] for r in rows
+                  if isinstance(r.get("mtf_after_focus"), dict) and r["mtf_after_focus"].get("min_TS") is not None]
+
+        return json.dumps({
+            "ok": True,
+            "mode": "active_focus_scan",
+            "focus_surface": int(surface_number),
+            "mtf_frequency": freq,
+            "scan_step_um": round(step * 1000.0, 2),
+            "temperatures": temps,
+            "nominal_thic_mm": round(t_nominal, 6) if t_nominal is not None else None,
+            "focus_travel_span_um": (round(max(travels) - min(travels), 3) if len(travels) >= 2 else None),
+            "min_mtf_across_temperatures": min(min_ts) if min_ts else None,
+            "rows": rows,
+            "note": (
+                "调焦量以常温(组态1)的像面间隔为基准：正=sensor 后移，负=前移。"
+                "行程跨度即调焦机构需求，建议留 30%~50% 余量。"
+                "MTF 走原生 FFT MTF vs Field，不用 MTFT 操作数（多组态下会锁死在组态1）。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def _operand_value(self, op_name: str, srf: int = 0, wave: int = 0,
+                       hx: float = 0.0, hy: float = 0.0,
+                       px: float = 0.0, py: float = 0.0) -> float | None:
+        """用 `MFE.GetOperandValue()` 直接算任意操作数，**不进评价函数**。
+
+        官方文档（IMeritFunctionEditor）："Returns the value of any optimization
+        operand, even if the operand is not currently in the merit function."
+
+        相比「插入行 → 读 Value → 删行」，这条路没有副作用：
+        不会残留行、不会改动 MF、也不会触发 MFE 的重算缓存问题。
+        """
+        mfe = self.conn.mfe
+        type_val = _resolve_operand_type(op_name)
+        if type_val is None:
+            return None
+        try:
+            v = mfe.GetOperandValue(int(type_val), int(srf), int(wave),
+                                    float(hx), float(hy), float(px), float(py), 0.0, 0.0)
+            return float(v)
+        except Exception:
+            return None
+
+    def _cra_at_max_field(self, image_surface: int, hy: float = 0.8675,
+                          hx: float = 0.0, wave: int = 3) -> float | None:
+        """读主光线在像面的入射角（CRA，度）。
+
+        **首选 `GetOperandValue`**：不插行、不留残留、不改 MF。
+        次选「插 RAID 行 → 读 Value → 删行」（老办法，插行法曾残留 11 行污染 MF，
+        且删除缺 RemoveOperandAt 兜底）。
+        """
+        v = self._operand_value("RAID", srf=image_surface, wave=wave, hx=hx, hy=hy)
+        if v is not None:
+            return round(v, 4)
+
+        mfe = self.conn.mfe
+        raid_id = _resolve_operand_type("RAID")
+        if raid_id is None:
+            return None
+        try:
+            pos = _safe(mfe, "NumberOfOperands", 0) + 1
+            row = mfe.InsertNewOperandAt(pos)
+        except Exception:
+            return None
+        if row is None:
+            return None
+        try:
+            _set_row_operand_type(row, raid_id)
+            row = _refetch_last_row(mfe) or row
+            _safe_set_attr(row, "Weight", 0.0)
+            _safe_set_attr(row, "Target", 0.0)
+            _write_operand_param(row, 1, int(image_surface))
+            _write_operand_param(row, 2, int(wave))
+            _write_operand_param(row, 3, float(hx))
+            _write_operand_param(row, 4, float(hy))
+            try:
+                mfe.CalculateMeritFunction()
+            except Exception:
+                pass
+            last = int(_safe(mfe, "NumberOfOperands", 0))
+            val = _safe(mfe.GetOperandAt(last), "Value", None)
+            try:
+                fv = float(val)
+            except (TypeError, ValueError):
+                fv = None
+            return round(fv, 4) if fv is not None else None
+        finally:
+            # 删除临时行。⚠️ DeleteOperandAt 可能抛异常，必须兜底 RemoveOperandAt，
+            # 否则会静默残留（2026-10-31 实测：11 次调用残留 11 行，MFE 912→923）。
+            try:
+                last = int(_safe(mfe, "NumberOfOperands", 0))
+                try:
+                    mfe.DeleteOperandAt(last)
+                except Exception:
+                    mfe.RemoveOperandAt(last)
+            except Exception:
+                pass
+
+    def _hard_metrics_scan(self, only_config: int | None = None) -> str:
+        """【无热化】逐温度组态实测硬指标：TOTR / 最大畸变 / 相对照度 / CRA。
+
+        2026-10-31 新增。存在的意义：无热化此前只验了 MTF，硬指标（畸变、CRA、
+        照度、总长）在高温下是否漂出规格并没有证据。本函数把它们逐组态测出来。
+
+        判据来源：
+          - TOTR：`_read_image_distance()`，第一面到像面的厚度累加（随组态变）
+          - 最大畸变 / 相对照度：**原生分析**，text_preview 自带「结构 N 的 M」标记，
+            可用来确认分析真的跑在目标组态上
+          - CRA：RAID 操作数。⚠️ 与 MTFT 同源，可能锁组态；
+            因此每次切组态后**先跑一次原生分析强制重算**，再读 RAID。
+            若全组态仍同值，说明确实锁死组态（这本身就是结论）。
+        """
+        import re as _re
+
+        mce = self._mce()
+        if mce is None:
+            return json.dumps({"ok": False, "error": "system.MCE 不可用"}, ensure_ascii=False, indent=2)
+        temps = self._configured_temperatures()
+        try:
+            n_cfg = int(_safe(mce, "NumberOfConfigurations", 1))
+        except Exception:
+            n_cfg = 1
+        n_use = min(len(temps), n_cfg)
+        if n_use < 1:
+            return json.dumps({"ok": False, "error": "没有可用组态"}, ensure_ascii=False)
+        targets = [int(only_config)] if only_config else list(range(1, n_use + 1))
+
+        num = int(self.conn.lde.NumberOfSurfaces)
+        img = num - 1
+
+        rows: list[dict] = []
+        for c in targets:
+            ok, how = self._set_current_config(mce, c)
+            if not ok:
+                rows.append({"config": c, "error": "切换组态失败"})
+                continue
+
+            # ① 原生畸变分析：既拿畸变值，又做「强制重算」给后面的 RAID 铺路
+            dist_pct = None
+            struct_tag = None
+            try:
+                d = json.loads(self.get_field_curvature_distortion_data())
+                txt = d.get("text_preview") or ""
+                m = _re.search(r"最大畸变\s*=\s*([-+]?\d*\.?\d+)\s*%", txt)
+                if m:
+                    dist_pct = float(m.group(1))
+                mt = _re.search(r"结构\s*(\d+)\s*的\s*(\d+)", txt)
+                if mt:
+                    struct_tag = f"{mt.group(1)}/{mt.group(2)}"
+            except Exception:
+                pass
+
+            # ② TOTR
+            totr = self._read_image_distance()
+
+            # ③ 相对照度（原生）
+            illum = None
+            try:
+                il = json.loads(self.get_relative_illumination_data())
+                illum = il.get("min_relative_illumination")
+            except Exception:
+                pass
+
+            # ④ CRA（RAID，走 GetOperandValue，按当前组态求值）
+            # 测三个视场并取最坏值：CRA 规格通常盯「最大视场的主光线角」，
+            # 只测单一视场会漏掉对角视场（对角合成半径最大，CRA 往往最高）。
+            hy_max = 1.0
+            try:
+                # 归一化：以最大视场半径为 1。field5=(0,15) → 0.8675；field6=(15,8.6) 对角 → (0.8675, 0.4974)
+                hy_max = 0.8675
+            except Exception:
+                pass
+            cra_y = self._cra_at_max_field(img, hx=0.0, hy=hy_max)
+            cra_diag = self._cra_at_max_field(img, hx=hy_max, hy=0.4974)
+            cra_norm = self._cra_at_max_field(img, hx=0.0, hy=1.0)
+            cra_pool = [v for v in (cra_y, cra_diag, cra_norm) if v is not None]
+            cra = max(cra_pool) if cra_pool else None
+
+            rows.append({
+                "config": c,
+                "temperature_c": temps[c - 1],
+                "structure_tag": struct_tag,
+                "totr_mm": round(totr, 4) if totr is not None else None,
+                "max_distortion_pct": dist_pct,
+                "min_relative_illumination": illum,
+                "cra_deg": cra,
+                "cra_detail": {"y15": cra_y, "diag": cra_diag, "norm1": cra_norm},
+                "switch_via": how,
+            })
+
+        self._set_current_config(mce, 1)
+
+        # --- 漂移统计（相对常温组态）---
+        base = next((r for r in rows if r.get("temperature_c") is not None
+                     and abs(r["temperature_c"] - 25.0) < 0.5), None)
+        drift: dict[str, object] = {}
+        if base:
+            def _span(key):
+                vals = [r[key] for r in rows if isinstance(r.get(key), (int, float))]
+                if len(vals) < 2:
+                    return None
+                return round(max(vals) - min(vals), 4)
+
+            drift = {
+                "totr_span_mm": _span("totr_mm"),
+                "distortion_span_pct": _span("max_distortion_pct"),
+                "illumination_span": _span("min_relative_illumination"),
+                "cra_span_deg": _span("cra_deg"),
+                "baseline": {
+                    "totr_mm": base.get("totr_mm"),
+                    "max_distortion_pct": base.get("max_distortion_pct"),
+                    "min_relative_illumination": base.get("min_relative_illumination"),
+                    "cra_deg": base.get("cra_deg"),
+                },
+            }
+
+        # --- CRA 是否锁组态的判定 ---
+        cra_vals = [r.get("cra_deg") for r in rows if isinstance(r.get("cra_deg"), (int, float))]
+        cra_locked = bool(len(cra_vals) >= 2 and (max(cra_vals) - min(cra_vals)) < 1e-9)
+        warnings: list[str] = []
+        if cra_locked:
+            warnings.append(
+                "CRA 在全组态完全相同 → RAID 操作数锁死组态1（与 MTFT 同源）。"
+                "CRA 的全温变化需改用其它手段（如 ray fan 或手工追迹）。"
+            )
+        if base is None:
+            warnings.append("没有 25℃ 组态，漂移基准取不到。")
+
+        return json.dumps({
+            "ok": True,
+            "mode": "hard_metrics",
+            "temperatures": temps[:n_use],
+            "rows": rows,
+            "drift": drift,
+            "cra_locked_to_config1": cra_locked,
+            "warnings": warnings or None,
+            "note": (
+                "structure_tag 是原生分析打印的「结构 N 的 M」，用来核验分析确实跑在目标组态。"
+                "TOTR=第一面到像面的厚度累加；畸变/照度走原生分析；CRA 走 RAID 操作数。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def _thermal_verdict(self, focus_surface: int = 18,
+                         mtf_frequency: float = 120.0,
+                         tce_barrel: float = 23.6,
+                         mtf_spec: float = 0.3) -> str:
+        """逐温度输出三条判据，回答「有没有出界 / 糊没糊 / 弥散多大」。
+
+        1) **离焦有没有出界**：不调焦状态下（像面间隔按镜筒 TCE 局部膨胀）焦面偏离
+           当前最佳位置多少，与瑞利焦深 ±2λF² 比。
+           判定量 = t_passive − t_now：正值 = 像面比焦点远（后焦不足）。
+        2) **MTF 糊没糊**：120 lp/mm 边缘视场（field 5 / field 6）的 min(T,S) 与规格比。
+           走原生 FFT MTF vs Field（MTFT 操作数插行法会锁组态，不可用）。
+        3) **点列图弥散**：全视场 RMS 半径，对比艾里斑。
+
+        注：当前文件须处于「已调焦」状态（各温度面18 = 扫描出的最佳值），
+        这样 MTF/点列图才是调焦后的真实表现。
+        """
+        mce = self._mce()
+        if mce is None:
+            return json.dumps({"ok": False, "error": "system.MCE 不可用"}, ensure_ascii=False, indent=2)
+        temps = self._configured_temperatures()
+        try:
+            n_cfg = int(_safe(mce, "NumberOfConfigurations", 1))
+        except Exception:
+            n_cfg = 1
+        n_use = min(len(temps), n_cfg)
+
+        thic_id = _safe(self.conn.constants, "MultiConfigOperandType_THIC", None)
+        if thic_id is None:
+            return json.dumps({"ok": False, "error": "找不到 THIC 常量"}, ensure_ascii=False, indent=2)
+        thic_id = int(thic_id)
+        focus_op = None
+        for r in range(1, int(_safe(mce, "NumberOfOperands", 0)) + 1):
+            try:
+                cand = mce.GetOperandAt(r)
+                if int(_safe(cand, "Type", -1)) == thic_id and int(_safe(cand, "Param1", -1)) == int(focus_surface):
+                    focus_op = cand
+                    break
+            except (TypeError, ValueError):
+                continue
+
+        dof_um = None
+        fnum = self._system_f_number()
+        if fnum:
+            dof_um = round(2 * 0.000588 * (fnum ** 2) * 1000.0, 2)
+
+        rows: list[dict] = []
+        for c in range(1, n_use + 1):
+            ok, _ = self._set_current_config(mce, c)
+            if not ok:
+                rows.append({"config": c, "error": "切换组态失败"})
+                continue
+            temp_c = temps[c - 1]
+            dT = temp_c - 25.0
+
+            # 当前（调焦后）像面间隔
+            t_now = None
+            if focus_op is not None:
+                try:
+                    t_now = float(focus_op.GetOperandCell(c).DoubleValue)
+                except Exception:
+                    t_now = None
+            # 不调焦时该温度应有的间隔（镜筒局部膨胀）
+            t_passive = 0.8 * (1.0 + tce_barrel * 1e-6 * dT)
+            defocus_um = round((t_passive - t_now) * 1000.0, 2) if t_now is not None else None
+
+            # MTF（原生）
+            edge = {}
+            try:
+                d = json.loads(self.get_fft_mtf_vs_field(frequencies=[float(mtf_frequency)]))
+                flds = d["mtf_vs_field_summary"]["frequencies"][0]["fields"]
+                for f in flds:
+                    edge[str(f.get("field"))] = {"T": f.get("T"), "S": f.get("S")}
+            except Exception as e:
+                edge = {"error": str(e)}
+
+            # 点列图（原生）
+            rms = {}
+            try:
+                sp = json.loads(self.get_spot_diagram_data())
+                for item in (sp.get("fields") or []):
+                    v = item.get("rms_radius_um") or item.get("rms_radius_lens_units")
+                    rms[str(item.get("field"))] = round(float(v), 3) if v is not None else None
+            except Exception as e:
+                rms = {"error": str(e)}
+
+            # 边缘视场 = field 5(15°) 与 field 6(对角)
+            edge_vals = []
+            for k in ("5", "6"):
+                fv = edge.get(k)
+                if isinstance(fv, dict):
+                    for comp in (fv.get("T"), fv.get("S")):
+                        if isinstance(comp, (int, float)):
+                            edge_vals.append(float(comp))
+            edge_min = round(min(edge_vals), 4) if edge_vals else None
+
+            rms_vals = [v for v in rms.values() if isinstance(v, (int, float))]
+            rms_max = round(max(rms_vals), 3) if rms_vals else None
+
+            rows.append({
+                "config": c,
+                "temperature_c": temp_c,
+                "focus_thic_mm": round(t_now, 6) if t_now is not None else None,
+                "defocus_if_no_focus_um": defocus_um,
+                "defocus_over_dof": (round(abs(defocus_um) / dof_um, 1)
+                                     if defocus_um is not None and dof_um else None),
+                "edge_mtf_min": edge_min,
+                "edge_mtf_pass": (edge_min >= mtf_spec) if edge_min is not None else None,
+                "spot_rms_max_um": rms_max,
+                "mtf_per_field": edge,
+                "spot_rms_per_field": rms,
+            })
+
+        self._set_current_config(mce, 1)
+
+        def _worst(key, lo=True):
+            vals = [(r[key], r["temperature_c"]) for r in rows if isinstance(r.get(key), (int, float))]
+            if not vals:
+                return None
+            return (min(vals, key=lambda x: x[0]) if lo else max(vals, key=lambda x: x[0]))
+
+        worst_mtf = _worst("edge_mtf_min", lo=True)
+        worst_defocus = _worst("defocus_if_no_focus_um", lo=False)
+        worst_defocus = (abs(worst_defocus[0]), worst_defocus[1]) if worst_defocus else None
+        worst_rms = _worst("spot_rms_max_um", lo=False)
+
+        return json.dumps({
+            "ok": True,
+            "mode": "thermal_verdict",
+            "mtf_frequency": float(mtf_frequency),
+            "mtf_spec": float(mtf_spec),
+            "depth_of_focus_um": dof_um,
+            "dof_note": "瑞利判据 ±2λF²；F/1.4、λ=0.588µm → ±2.3µm（峰谷 4.6µm）",
+            "rows": rows,
+            "worst": {
+                "edge_mtf": {"value": worst_mtf[0], "temperature_c": worst_mtf[1]} if worst_mtf else None,
+                "defocus_no_focus_um": {"value": worst_defocus[0], "temperature_c": worst_defocus[1]} if worst_defocus else None,
+                "spot_rms": {"value": worst_rms[0], "temperature_c": worst_rms[1]} if worst_rms else None,
+            },
+            "note": (
+                "defocus_if_no_focus_um = 若不调焦、像面只随镜筒局部膨胀时，焦面相对最佳位置的偏离；"
+                "超过焦深即「出界」。edge_mtf_min 取 field5(15°)/field6(对角) 的 T/S 最小值。"
+                "spot_rms 为点列图 RMS 半径（弥散，不是畸变；畸变另见 param='metrics'）。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def set_thermal_glass_tce(self, report_only: bool = True) -> str:
+        """读取所有玻璃的 TCE 与 dn/dT 数据（无热化敏感性清单）.
+
+        2026-10-31 修复：原实现 try 块内只有注释，tce/dn_dT 恒为 None（假实现）。
+        现改为「临时 MFE 操作数探测法」：逐片玻璃插 GTCE / DNDT 操作数、读 Value、读完删行。
+        这是读 ZOS-API 拿不到的材料热参数最可靠的路子（同 RAID 读 CRA 的思路）。
+        """
+        lde = self.conn.lde
+        num_surf = lde.NumberOfSurfaces
+        mfe = self.conn.mfe
+
+        targets: list[dict] = []
+        seen: set[str] = set()
+        for i in range(1, num_surf):
+            try:
+                surf = lde.GetSurfaceAt(i)
+            except Exception:
+                continue
+            mat = _safe(surf, "Material", "")
+            key = str(mat).strip() if mat else ""
+            if not key or key in ("-", "MIRROR", "ABSORB"):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append({
+                "surface": i,
+                "material": key,
+                "comment": _safe(surf, "Comment", ""),
+                "tce_ppm_per_c": None,
+                "dn_dT_per_c": None,
+            })
+
+        if not targets:
+            return json.dumps({"ok": False, "error": "未找到含材料的表面"}, ensure_ascii=False)
+        if mfe is None:
+            return json.dumps({"ok": False, "error": "MFE 不可用，无法用操作数读取热参数"}, ensure_ascii=False)
+
+        inserted_rows: list[int] = []
+        probe_errors: dict[str, str] = {}
+
+        def _probe(op_type: str, surf_no: int) -> float | None:
+            try:
+                raw = self.add_operand(op_type, target=0.0, weight=0.0, int1=surf_no)
+                payload = json.loads(raw) if isinstance(raw, str) else {}
+            except Exception as e:
+                probe_errors.setdefault(op_type, f"调用异常: {e}")
+                return None
+            row = payload.get("row")
+            if row is not None:
+                inserted_rows.append(int(row))
+            if payload.get("error"):
+                probe_errors.setdefault(op_type, str(payload["error"]))
+                return None
+            val = payload.get("current_value")
+            try:
+                return float(val) if val is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            for item in targets:
+                item["tce_ppm_per_c"] = _probe("GTCE", item["surface"])
+                item["dn_dT_per_c"] = _probe("DNDT", item["surface"])
+        finally:
+            for row in sorted(set(inserted_rows), reverse=True):
+                try:
+                    mfe.RemoveOperandAt(row)
+                except Exception:
+                    pass
+
+        ok_count = sum(1 for t in targets if t["tce_ppm_per_c"] is not None or t["dn_dT_per_c"] is not None)
+
+        # 单位自检：玻璃 TCE 约 5~10 ppm/℃ = 5e-6~1e-5 /K
+        unit_hint = None
+        tce_vals = [abs(t["tce_ppm_per_c"]) for t in targets if t["tce_ppm_per_c"]]
+        if tce_vals:
+            med = sorted(tce_vals)[len(tce_vals) // 2]
+            if med < 1e-3:
+                unit_hint = "GTCE 返回值量级 ~1e-6，单位应为 1/K（乘 1e6 得 ppm/℃）"
+            elif 1 <= med <= 100:
+                unit_hint = "GTCE 返回值量级 ~1-100，单位应为 ppm/℃"
+            else:
+                unit_hint = f"GTCE 返回值量级异常（中位数 {med:g}），请人工核对单位"
+
+        result = {
+            "ok": ok_count > 0,
+            "glass_count": len(targets),
+            "glasses": targets,
+            "tce_readable": ok_count,
+            "unit_hint": unit_hint,
+            "probe_errors": probe_errors or None,
+            "method": "临时 GTCE/DNDT 操作数读取后删除，不改动原 MFE",
+            "guidance": (
+                "无热化关键是「正/负光焦度玻璃的 TCE 与 dn/dT 匹配」。"
+                "dn/dT 为负的玻璃（氟磷酸盐 / CaF2 类）可抵消镜筒正膨胀；"
+                "镧系高折射率玻璃 dn/dT 普遍为正且量级相近，难以组被动无热化。"
+            ),
+        }
+        if ok_count == 0:
+            result["error"] = "GTCE/DNDT 均未读到有效值，见 probe_errors"
+            result["hint"] = (
+                "若报「未知操作数类型」，说明该 Zemax 版本无此操作数；"
+                "可改用 OpticStudio GUI 的 Materials 分析窗口查 dN/dT。"
+            )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _all_config_bfl(self) -> list[dict]:
+        """所有温度组态的 BFL 列表（复用 get_thermal_defocus 的读取逻辑）。"""
+        try:
+            payload = json.loads(self.get_thermal_defocus())
+        except Exception as e:
+            return [{"error": str(e)}]
+        return [
+            {
+                "config": r.get("config"),
+                "temperature_c": r.get("temperature_c"),
+                "bfl_mm": r.get("bfl_mm"),
+                "defocus_um": r.get("defocus_um"),
+            }
+            for r in payload.get("rows", [])
+        ]
+
+    def optimize_athermal(self, algorithm: str = "DLS", cycles: str = "Automatic",
+                          duration_seconds: int = 30) -> str:
+        """多组态联合优化：在各温度组态下同时保持像质.
+
+        2026-10-31 修复：原实现只是 run_optimization 的包装，且前后各读一次
+        当前组态 BFL。现在：真正逐组态读全温 BFL、报告优化前后漂移改善，
+        并对「MCE 组态不足 / 温度组态未生效」给出明确警告。
+        """
+        warnings: list[str] = []
+
+        mce = self._mce()
+        n_cfg = None
+        if mce is not None:
+            try:
+                n_cfg = int(mce.NumberOfConfigurations)
+            except Exception:
+                n_cfg = None
+
+        temps = self._configured_temperatures()
+
+        if not n_cfg or n_cfg < 2:
+            warnings.append(
+                "MCE 组态数 <2：本次只是普通单组态优化，不构成无热化。"
+                "请先 set_temperature_configs 建立多温度组态。"
+            )
+        elif len(temps) > n_cfg:
+            warnings.append(f"MCE 组态数 {n_cfg} < 温度点数 {len(temps)}，部分温度未生效。")
+
+        before = self._all_config_bfl()
+
+        opt_raw = self.run_optimization(
+            algorithm=algorithm,
+            cycles=cycles,
+            duration_seconds=duration_seconds,
+        )
+        try:
+            opt_payload = json.loads(opt_raw)
+        except Exception:
+            opt_payload = {"raw": opt_raw}
+
+        after = self._all_config_bfl()
+
+        def _span(rows: list[dict]) -> float | None:
+            vals = [abs(r["defocus_um"]) for r in rows if r.get("defocus_um") is not None]
+            return round(max(vals), 3) if vals else None
+
+        before_span = _span(before)
+        after_span = _span(after)
+
+        improved = None
+        if before_span is not None and after_span is not None:
+            improved = after_span < before_span - 1e-6
+
+        bfls_after = [r["bfl_mm"] for r in after if r.get("bfl_mm") is not None]
+        if len(bfls_after) >= 2 and (max(bfls_after) - min(bfls_after)) < 1e-9:
+            warnings.append(
+                "⚠️ 优化后全温 BFL 仍完全相同：热拾取求解没挂上，优化并未针对温度做任何事。"
+            )
+
+        return json.dumps({
+            "ok": True,
+            "algorithm": algorithm,
+            "configurations": n_cfg,
+            "temperatures": temps,
+            "before_bfl": before,
+            "after_bfl": after,
+            "max_defocus_um_before": before_span,
+            "max_defocus_um_after": after_span,
+            "thermal_drift_improved": improved,
+            "optimization": opt_payload,
+            "warnings": warnings,
+            "note": (
+                "多组态优化要生效，MFE 操作数的 Config 列须为 0（所有组态共用）"
+                "或在每组态各有评价项；否则优化器只动当前组态。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def _set_current_config(self, mce, idx: int) -> tuple[bool, str | None]:
+        """切换 MCE 当前组态（成员名随 ZOS-API 版本/包装方式变化，逐个尝试）。"""
+        for name in ("SetCurrentConfiguration", "SetCurrentConfigurationNumber", "SetConfiguration"):
+            fn = getattr(mce, name, None)
+            if callable(fn):
+                try:
+                    fn(int(idx))
+                    return True, f"{name}({idx})"
+                except Exception:
+                    continue
+        for name in ("CurrentConfiguration", "CurrentConfig", "CurrentConfigurationNumber"):
+            try:
+                if hasattr(mce, name):
+                    setattr(mce, name, int(idx))
+                    return True, f"{name}={idx}"
+            except Exception:
+                continue
+        return False, None
+
+    def _mce_attr_probe(self, mce) -> dict:
+        """诊断：列出 MCE 上与 config 相关的成员及当前值。"""
+        info: dict[str, object] = {"config_members": []}
+        try:
+            for nm in dir(mce):
+                if "config" in nm.lower():
+                    val = _safe(mce, nm, "<unreadable>")
+                    info["config_members"].append({  # type: ignore[union-attr]
+                        "name": nm,
+                        "value": _jsonable_number(val) if isinstance(val, (int, float)) else str(val)[:60],
+                    })
+        except Exception as e:
+            info["error"] = str(e)
+        return info
+
+    def _read_bfl(self) -> float | None:
+        """读当前组态下的后焦距（像面前一个有限厚度间隔）。"""
+        lde = self.conn.lde
+        try:
+            num = lde.NumberOfSurfaces
+        except Exception:
+            return None
+        for idx in range(num - 2, 0, -1):
+            try:
+                t = _safe(lde.GetSurfaceAt(idx), "Thickness", None)
+            except Exception:
+                continue
+            if t is None:
+                continue
+            try:
+                tv = abs(float(t))
+            except (TypeError, ValueError):
+                continue
+            if tv < 1e6:
+                return round(tv, 6)
+        return None
+
+    def _read_image_distance(self) -> float | None:
+        """读「第一面到像面」的累计距离（mm），用于反映整机热胀。
+
+        比单读最后一段空气可靠：镜筒/隔圈的任何热膨胀都会累加到这里。
+        无热化的离焦本质 = 焦点位移 − 像面位移，本值即像面位移的主体。
+        """
+        lde = self.conn.lde
+        try:
+            num = lde.NumberOfSurfaces
+        except Exception:
+            return None
+        total = 0.0
+        got = 0
+        for idx in range(1, num - 1):
+            try:
+                t = _safe(lde.GetSurfaceAt(idx), "Thickness", None)
+            except Exception:
+                continue
+            if t is None:
+                continue
+            try:
+                tv = float(t)
+            except (TypeError, ValueError):
+                continue
+            if abs(tv) >= 1e6:
+                continue
+            total += tv
+            got += 1
+        return round(total, 6) if got else None
+
+    def _thermal_bfl_table(self) -> dict:
+        """当前组态的后焦距（供 optimize_athermal 前后对比）。"""
+        return {"temperature_c": self._get_current_temperature(), "bfl_mm": _jsonable_number(self._read_bfl())}
+
+    def get_thermal_defocus(self) -> str:
+        """读取各温度组态下的后焦距漂移（无热化验收）.
+
+        2026-10-31 修复：原实现只改 SystemData 环境温度、从不切 MCE 组态，
+        且温度点硬编码。现在温度取自 MCE（`_configured_temperatures`），
+        并真正逐组态切换后读 BFL；同时加了「全温同值 = 热拾取没挂上」的假阳性检测。
+        """
+        temps = self._configured_temperatures()
+        mce = self._mce()
+
+        n_cfg = None
+        if mce is not None:
+            try:
+                n_cfg = int(mce.NumberOfConfigurations)
+            except Exception:
+                n_cfg = None
+
+        rows: list[dict] = []
+        mode = "environment"
+        warnings: list[str] = []
+
+        if mce is not None and n_cfg and n_cfg >= len(temps):
+            # --- 正常路径：逐组态切换 ---
+            mode = "mce"
+            orig_cfg = None
+            for nm in ("CurrentConfiguration", "CurrentConfig", "CurrentConfigurationNumber"):
+                v = _safe(mce, nm, None)
+                if isinstance(v, (int, float)):
+                    orig_cfg = int(v)
+                    break
+            for i, t in enumerate(temps, start=1):
+                entry = {"config": i, "temperature_c": t, "bfl_mm": None, "image_distance_mm": None}
+                ok_sw, how = self._set_current_config(mce, i)
+                if not ok_sw:
+                    entry["error"] = "无可用成员切换组态"
+                    rows.append(entry)
+                    continue
+                entry["switch_via"] = how
+                entry["bfl_mm"] = self._read_bfl()
+                entry["image_distance_mm"] = self._read_image_distance()
+                rows.append(entry)
+            if orig_cfg:
+                self._set_current_config(mce, orig_cfg)
+            if any(r.get("error") for r in rows):
+                warnings.append(f"组态切换失败，MCE 可用成员：{self._mce_attr_probe(mce)}")
+        else:
+            # --- 退化路径：只有 1 个组态时改环境温度（近似，需热拾取求解才有效）---
+            mode = "environment"
+            if mce is None:
+                warnings.append("system.MCE 不可用，退化用环境温度近似；结果仅在已挂热拾取求解时有效。")
+            elif n_cfg is not None:
+                warnings.append(f"MCE 组态数 {n_cfg} < 温度点数 {len(temps)}，先跑 set_temperature_configs。")
+            for t in temps:
+                self._set_environment_temperature(t)
+                rows.append({
+                    "config": None,
+                    "temperature_c": t,
+                    "bfl_mm": self._read_bfl(),
+                    "image_distance_mm": self._read_image_distance(),
+                })
+            self._set_environment_temperature(25.0)
+
+        # --- 相对常温（25℃）的像面位移 ---
+        def _ref_of(key: str) -> float | None:
+            for r in rows:
+                if r.get(key) is not None and abs((r.get("temperature_c") or 25.0) - 25.0) < 0.5:
+                    return r[key]
+            valid = [r[key] for r in rows if r.get(key) is not None]
+            if valid:
+                warnings.append("温度点中无 25℃，已用中间组态作参考。")
+                return valid[len(valid) // 2]
+            return None
+
+        ref_bfl = _ref_of("bfl_mm")
+        ref_img = _ref_of("image_distance_mm")
+
+        for r in rows:
+            if r.get("image_distance_mm") is not None and ref_img is not None:
+                shift = round((r["image_distance_mm"] - ref_img) * 1000.0, 3)
+                r["image_shift_um"] = shift
+                r["defocus_um"] = shift          # 兼容旧字段名
+            else:
+                r["image_shift_um"] = None
+                r["defocus_um"] = None
+
+        vals = [abs(r["image_shift_um"]) for r in rows if r.get("image_shift_um") is not None]
+        max_shift = max(vals) if vals else None
+
+        # --- 假阳性检测（关键）：像面距离在温度间毫无变化 = 热拾取没生效 ---
+        suspect = False
+        imgs = [r["image_distance_mm"] for r in rows if r.get("image_distance_mm") is not None]
+        if len(imgs) >= 2 and (max(imgs) - min(imgs)) < 1e-9:
+            suspect = True
+            warnings.append(
+                "⚠️ 全温像面距离完全相同：极可能是「热拾取求解未正确挂载」或「TCE=0」，"
+                "**不是真的无热化**。请先用 add_thermal_pickup_solve 给半径/厚度/空气间隔挂 Thermal Pickup，"
+                "再重跑本工具。此结果不可用于验收。"
+            )
+        if any(r.get("error") for r in rows):
+            warnings.append("部分组态切换失败，结果不完整。")
+
+        # 景深参考：瑞利判据 ±2λF²
+        dof_um = None
+        fnum = self._system_f_number()
+        if fnum:
+            dof_um = round(2 * 0.000588 * (fnum ** 2) * 1000.0, 2)
+
+        summary = None
+        if max_shift is not None:
+            summary = {
+                "max_image_shift_um": max_shift,
+                "dof_um": dof_um,
+                "ratio": round(max_shift / dof_um, 2) if dof_um else None,
+                "pass": None if suspect else (max_shift <= dof_um if dof_um else None),
+                "suspect_false_positive": suspect,
+            }
+
+        return json.dumps({
+            "ok": True,
+            "mode": mode,
+            "temperatures": [r.get("temperature_c") for r in rows],
+            "reference_temperature": 25.0,
+            "reference_bfl_mm": ref_bfl,
+            "reference_image_distance_mm": ref_img,
+            "rows": rows,
+            "max_image_shift_um": max_shift,
+            "max_defocus_um": max_shift,
+            "depth_of_focus_um": dof_um,
+            "verdict": summary,
+            "warnings": warnings,
+            "note": (
+                "image_shift_um = 各温度「第一面→像面累计距离」相对常温的变化，反映整机热胀；"
+                "它是离焦的主体但不是全部（真离焦 = 焦点位移 − 像面位移）。"
+                "严格验收请看全温 MTF 跌落 ≤20%，或用 BFL 操作数读真实后焦距。"
+                "判据参考：max_image_shift < 景深（瑞利 ±2λF²）。"
+            ),
+        }, ensure_ascii=False, indent=2)
+
+    def _system_f_number(self) -> float | None:
+        """读系统 F 数（用于景深参考）。"""
+        try:
+            ap = self.conn.system_data.Aperture
+            val = _safe(ap, "ApertureValue", None)
+            if val is None:
+                return None
+            f = float(val)
+            return f if 0 < f < 100 else None
+        except Exception:
+            return None
+
+    def _configured_temperatures(self) -> list[float]:
+        """温度点真源：优先从 MCE 的 TEMP 操作数读 → 内存缓存 → 默认值。
+
+        2026-10-31 修复：原实现硬编码返回 [-40, 25, 85]，导致 set_temperature_configs
+        设的温度对 get_thermal_defocus 完全无效（设 -55/+105 也会读到 -40/+85）。
+        现在以 MCE 组态为唯一真源，保证「设什么温度就验什么温度」。
+        """
+        temps = self._mce_temperatures()
+        if temps:
+            return temps
+        cached = getattr(self, "_thermal_temps", None)
+        if cached:
+            return [float(t) for t in cached]
+        return [-40.0, 25.0, 85.0]
+
+    def _mce_temp_operand_type(self) -> tuple[int | None, str | None]:
+        """探测 MCE 里 TEMP 操作数的枚举值（COM 枚举名随版本变化）。"""
+        known_names = [
+            "MultiConfigOperandType_TEMP",
+            "MCEOperandType_TEMP",
+            "MultiConfigOperandTypeTEMP",
+            "ConfigOperandType_TEMP",
+        ]
+        for nm in known_names:
+            val = _safe(self.conn.constants, nm, None)
+            if val is not None:
+                try:
+                    return int(val), nm
+                except Exception:
+                    pass
+
+        # 遍历 constants 全部属性，找名字同时含 MULTICONFIG/CONFIG 与 TEMP 的项
+        try:
+            for nm in dir(self.conn.constants):
+                up = nm.upper()
+                if "TEMP" in up and ("CONFIG" in up or "MCE" in up):
+                    val = _safe(self.conn.constants, nm, None)
+                    if val is not None:
+                        try:
+                            return int(val), f"scan:{nm}"
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return None, None
+
+    def _mce_temperatures(self) -> list[float]:
+        """从 MCE 组态里读出各 config 的 TEMP 值；读不到返回空列表。"""
+        mce = self._mce()
+        if mce is None:
+            return []
+        try:
+            ncfg = int(mce.NumberOfConfigurations)
+            nop = int(mce.NumberOfOperands)
+        except Exception:
+            return []
+        if ncfg < 1 or nop < 1:
+            return []
+
+        tid, _ = self._mce_temp_operand_type()
+        for r in range(1, nop + 1):
+            try:
+                op = mce.GetOperandAt(r)
+            except Exception:
+                continue
+            if op is None:
+                continue
+            typ = _safe(op, "Type", None)
+            is_temp = False
+            if typ is not None:
+                if tid is not None:
+                    try:
+                        is_temp = int(typ) == int(tid)
+                    except Exception:
+                        is_temp = False
+                if not is_temp:
+                    is_temp = "TEMP" in str(typ).upper()
+            if not is_temp:
+                continue
+
+            vals: list[float | None] = []
+            for c in range(1, ncfg + 1):
+                try:
+                    cell = op.GetOperandCell(c)
+                except Exception:
+                    vals.append(None)
+                    continue
+                v = _safe(cell, "DoubleValue", None)
+                if v is None:
+                    v = _safe(cell, "IntegerValue", None)
+                try:
+                    vals.append(float(v) if v is not None else None)
+                except Exception:
+                    vals.append(None)
+            if vals and all(v is not None for v in vals):
+                return [float(v) for v in vals]
+        return []
+
+    # ------------------------------------------------------------------
+    #  公差分析 (Tolerancing) — TDE + 灵敏度 + 蒙特卡洛
+    # ------------------------------------------------------------------
+    def _tde(self):
+        """公差数据编辑器 (IToleranceDataEditor)."""
+        return _safe(self.conn.system, "TDE", None)
+
+    def set_tolerances(self, grade: str = "medium") -> str:
+        """按等级写入公差（序列公差向导 + 直接 TDE）."""
+        grade_l = (grade or "medium").strip().lower()
+        presets = {
+            "loose": {
+                "radius_fringes": 5.0, "thickness_mm": 0.05, "decenter_mm": 0.03,
+                "tilt_arcmin": 2.0, "index": 0.002, "abbe_pct": 1.0, "irregular_fringes": 2.0,
+            },
+            "medium": {
+                "radius_fringes": 3.0, "thickness_mm": 0.02, "decenter_mm": 0.02,
+                "tilt_arcmin": 1.0, "index": 0.001, "abbe_pct": 0.5, "irregular_fringes": 1.0,
+            },
+            "tight": {
+                "radius_fringes": 2.0, "thickness_mm": 0.01, "decenter_mm": 0.01,
+                "tilt_arcmin": 0.5, "index": 0.0005, "abbe_pct": 0.3, "irregular_fringes": 0.5,
+            },
+        }
+        preset = presets.get(grade_l, presets["medium"])
+
+        result: dict[str, object] = {
+            "grade": grade_l,
+            "tolerance_values": preset,
+            "applied": [],
+            "wizard": None,
+            "notes": [],
+        }
+
+        # 尝试使用序列公差向导
+        tde = self._tde()
+        if tde is None:
+            result["tde_available"] = False
+            result["notes"].append("system.TDE 不可用，公差写入失败。")
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        result["tde_available"] = True
+
+        wizard = None
+        try:
+            wizard = _safe(tde, "SEQToleranceWizard", None)
+        except Exception:
+            wizard = None
+        if wizard is None:
+            try:
+                wizard = tde.SEQToleranceWizard
+            except Exception:
+                wizard = None
+
+        if wizard is None:
+            result["notes"].append("SEQToleranceWizard 不可用，需逐项在 TDE 直接写入（暂不支持自动）.")
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        # 向导字段映射（因版本而异，逐项安全写入）
+        field_map = {
+            "radius": ("RadiusTolerance", preset["radius_fringes"]),
+            "thickness": ("ThicknessTolerance", preset["thickness_mm"]),
+            "decenter": ("DecenterTolerance", preset["decenter_mm"]),
+            "tilt": ("TiltTolerance", preset["tilt_arcmin"]),
+            "index": ("IndexTolerance", preset["index"]),
+            "abbe": ("AbbeTolerance", preset["abbe_pct"]),
+        }
+        for key, (attr, value) in field_map.items():
+            ok = False
+            try:
+                if hasattr(wizard, attr):
+                    setattr(wizard, attr, value)
+                    ok = True
+                else:
+                    # 从 prop_map 模糊匹配
+                    prop_map = getattr(wizard, "_prop_map_get_", {}) or {}
+                    for pk in prop_map:
+                        if pk.lower() == attr.lower():
+                            setattr(wizard, pk, value)
+                            ok = True
+                            break
+            except Exception as e:
+                result["notes"].append(f"写入 {key}({attr}) 失败: {e}")
+            result["applied"].append({"field": key, "attr": attr, "value": value, "ok": ok})
+
+        result["wizard"] = {
+            "class": getattr(wizard, "__class__", type(wizard)).__name__ if wizard is not None else None,
+        }
+        result["guidance"] = (
+            "向导写入后，需确认 TDE 中已生成对应公差操作数；"
+            "随后用 run_tolerance_sensitivity / run_tolerance_monte_carlo 分析。"
+            "若向导字段映射不匹配（版本差异），请反馈具体报错以调整字段名。"
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def _run_tolerancing_analysis(self, mode: str = "sensitivity", trials: int = 200,
+                                  criterion: str = "RMS spot radius") -> dict:
+        """打开 Tolerancing Analysis 分析窗口并采集结果（复用 _run_analysis_capture 思路）."""
+        system = self.conn.system
+        analyses = getattr(system, "Analyses", None)
+        if analyses is None:
+            return {"error": "system.Analyses 不可用"}
+
+        # Tolerancing 分析通常通过 New_Tolerancing 或专用方法创建
+        tol_analysis = None
+        try_methods = ["New_Tolerancing", "New_TolerancingYield", "OpenTolerancing"]
+        for m in try_methods:
+            if hasattr(analyses, m):
+                try:
+                    tol_analysis = getattr(analyses, m)()
+                    break
+                except Exception:
+                    continue
+        if tol_analysis is None:
+            # 回退：标准 New_Analysis 用容差分析 ID（因版本而异，尝试）
+            for aid in (7, 30, 52, 56):
+                try:
+                    tol_analysis = analyses.New_Analysis(aid)
+                    break
+                except Exception:
+                    continue
+
+        if tol_analysis is None:
+            return {"error": "无法创建 Tolerancing Analysis（接口名随版本变化）"}
+
+        try:
+            settings = tol_analysis.GetSettings()
+            # 设置模式/抽样
+            _safe_set_attr(settings, "NumberOfMonteCarloFiles", int(trials))
+            try:
+                settings.ApplyAndWaitForCompletion()
+            except Exception:
+                try:
+                    settings.Apply()
+                    tol_analysis.WaitForCompletion()
+                except Exception as e:
+                    return {"error": f"公差分析执行失败: {e}"}
+            results = tol_analysis.GetResults()
+            payload = {
+                "ok": True,
+                "mode": mode,
+                "trials": trials,
+                "criterion": criterion,
+                "results": _analysis_results_to_dict(results) if results is not None else None,
+            }
+            return payload
+        except Exception as e:
+            return {"error": f"公差分析异常: {e}"}
+        finally:
+            try:
+                tol_analysis.Close()
+            except Exception:
+                pass
+
+    def run_tolerance_sensitivity(self, criterion: str = "RMS spot radius") -> str:
+        result = self._run_tolerancing_analysis(mode="sensitivity", criterion=criterion)
+        result.setdefault("criterion", criterion)
+        result.setdefault("mode", "sensitivity")
+        result["note"] = (
+            "灵敏度分析给出每项公差单独导致的像质劣化；"
+            "最敏感项是量产良率的关键，必要时收紧该项公差或改设计降低敏感度。"
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def run_tolerance_monte_carlo(self, trials: int = 200, criterion: str = "RMS spot radius") -> str:
+        result = self._run_tolerancing_analysis(mode="monte_carlo", trials=trials, criterion=criterion)
+        result.setdefault("criterion", criterion)
+        result.setdefault("mode", "monte_carlo")
+        result["note"] = (
+            "蒙特卡洛给出量产良率分布；若良率不足（如 <90%），"
+            "需识别最差样本的贡献公差并收紧，或增加补偿器。"
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def get_tolerance_report(self) -> str:
+        """汇总公差分析结果（读取最近结果 + 结论）."""
+        # 尝试读取最近公差分析（若有持久缓存）
+        result: dict[str, object] = {
+            "ok": True,
+            "guidance": (
+                "公差验收结论需综合：1) 灵敏度最差项；2) 蒙特卡洛良率；3) 补偿器行程是否覆盖公差漂移。"
+                "车规量产通常要求 90% 良率（RMS 或 MTF 达标），最差公差项贡献不应超过总预算的一半。"
+            ),
+            "checklist": [
+                "曲率公差（光圈）",
+                "厚度公差（mm）",
+                "偏心（mm）",
+                "倾斜（′）",
+                "折射率/阿贝数",
+                "表面不规则度（光圈）",
+                "补偿器（后焦距/镜组位置）",
+            ],
+        }
+        # 尝试读取 TDE 当前公差数（若可枚举）
+        tde = self._tde()
+        if tde is not None:
+            try:
+                n = _safe(tde, "NumberOfOperands", None)
+                result["tde_operand_count"] = n
+            except Exception:
+                pass
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    def set_tolerance_compensator(self, surface_number: int, param: str = "thickness",
+                                  min: float = -0.2, max: float = 0.2) -> str:
+        """设置补偿器（装配补偿）."""
+        # 补偿器在 Zemax 公差中通过 TDE 的「Compensator」操作数实现；
+        # 常见做法：把某面厚度设为变量 + 在公差分析中指定补偿器。
+        result: dict[str, object] = {
+            "surface_number": surface_number,
+            "param": param,
+            "range_mm": [min, max],
+            "guidance": (
+                "补偿器(compensator)是装配时用来吸收公差误差的变量，"
+                "最常见是后焦距(BFL)或某镜组轴向位置。"
+                "补偿行程需覆盖「最差公差导致的离焦 + 热离焦」，否则良率受限于调焦能力。"
+            ),
+        }
+        tde = self._tde()
+        if tde is not None:
+            result["tde_available"] = True
+            result["note"] = "补偿器需在公差分析设置中显式指定（TDE 的 Compensator 操作数）；当前 MCP 先记录补偿配置，具体写入待 TDE 接口实测确认。"
+        else:
+            result["tde_available"] = False
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
     def _render_clearance_schematic(self, surfaces, entities, pairs, zv, image_path=None) -> str:
         """按 LDE 真实几何画出轴向剖面示意图，并把每对实体的净空标在图上。
 
@@ -5238,10 +7915,9 @@ class ZemaxToolkit:
         base_dir = current_file.parent if current_file else _WORKSPACE_ROOT
         layouts_dir = base_dir / "layouts"
         layouts_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_type = "".join(ch if ch.isalnum() else "_" for ch in layout_type.upper())
         if export_path is None:
-            export_path = str(layouts_dir / f"layout_{safe_type}_{timestamp}.bmp")
+            export_path = str(layouts_dir / f"layout_{safe_type}.png")
 
         result = {
             "ok": True,
@@ -5605,6 +8281,13 @@ _ANALYSIS_IDS = {
 }
 
 _ANALYSIS_SETTING_INTERFACES = {
+    # ★ 2026-10-29：GetSettings() 返回的是泛型 IAS_，没有 Field / Wavelength 属性，
+    # 导致 _apply_analysis_settings 里 hasattr 检查失败 → field/wave 参数被**静默丢弃**。
+    # 实测：传 wave=1 仍返回全部波长，且每个波长的 RMS 完全相同（就是合并值的复制）。
+    # 必须 CastTo 到具体设置接口才能写 Field / Wavelength。
+    "standard_spot": "IAS_Spot",
+    "ray_fan": "IAS_RayFan",
+    "opd_fan": "IAS_OpticalPathFan",
     "fft_mtf_vs_field": "IAS_FftMtfvsField",
     "huygens_mtf": "IAS_HuygensMtf",
 }
@@ -5650,14 +8333,26 @@ def _apply_analysis_settings(settings, overrides: dict) -> dict:
     overrides = dict(overrides or {})
 
     field_value = overrides.pop("field", None)
-    if field_value is not None and hasattr(settings, "Field"):
-        ok, err = _set_analysis_selector(settings.Field, int(field_value), "UseAllFields", "SetFieldNumber")
-        (report["applied"] if ok else report["failed"]).append({"setting": "Field", "value": field_value, "error": err})
+    if field_value is not None:
+        if hasattr(settings, "Field"):
+            ok, err = _set_analysis_selector(settings.Field, int(field_value), "UseAllFields", "SetFieldNumber")
+            (report["applied"] if ok else report["failed"]).append({"setting": "Field", "value": field_value, "error": err})
+        else:
+            report["failed"].append({
+                "setting": "Field", "value": field_value,
+                "error": "settings 无 Field 属性（需 CastTo 具体 IAS_ 接口，见 _ANALYSIS_SETTING_INTERFACES）",
+            })
 
     wave_value = overrides.pop("wave", None)
-    if wave_value is not None and hasattr(settings, "Wavelength"):
-        ok, err = _set_analysis_selector(settings.Wavelength, int(wave_value), "UseAllWavelengths", "SetWavelengthNumber")
-        (report["applied"] if ok else report["failed"]).append({"setting": "Wavelength", "value": wave_value, "error": err})
+    if wave_value is not None:
+        if hasattr(settings, "Wavelength"):
+            ok, err = _set_analysis_selector(settings.Wavelength, int(wave_value), "UseAllWavelengths", "SetWavelengthNumber")
+            (report["applied"] if ok else report["failed"]).append({"setting": "Wavelength", "value": wave_value, "error": err})
+        else:
+            report["failed"].append({
+                "setting": "Wavelength", "value": wave_value,
+                "error": "settings 无 Wavelength 属性（需 CastTo 具体 IAS_ 接口，见 _ANALYSIS_SETTING_INTERFACES）",
+            })
 
     frequencies = overrides.pop("frequencies", None)
     if frequencies is not None:
@@ -6125,7 +8820,7 @@ def _attach_rendered_fallback_image(payload: dict, analysis_key: str) -> None:
     results = payload.get("results") or {}
     export_dir = Path(str(exports.get("directory") or _WORKSPACE_ROOT))
     text_path = exports.get("text_path")
-    stem = Path(str(text_path)).stem if text_path else f"{analysis_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    stem = Path(str(text_path)).stem if text_path else analysis_key
     png_path = export_dir / f"{stem}_rendered.png"
 
     rendered = False
@@ -6136,6 +8831,9 @@ def _attach_rendered_fallback_image(payload: dict, analysis_key: str) -> None:
             rendered = True
         elif results.get("data_series"):
             _render_data_series_summary_png(results.get("data_series") or [], png_path)
+            rendered = True
+        elif results.get("data_grids"):
+            _render_data_grid_png(results.get("data_grids") or [], png_path)
             rendered = True
     except Exception as e:
         errors = exports.get("image_export_errors")
@@ -6328,6 +9026,63 @@ def _render_data_series_summary_png(data_series: list, path: Path) -> None:
             ly = top + 12 + curve_idx * 13
             _draw_line(canvas, lx, ly, lx + 22, ly, colors[curve_idx % len(colors)])
             _draw_text(canvas, lx + 28, ly - 4, f"C{curve_idx + 1}", (40, 40, 40), scale=1)
+    _write_png(path, canvas)
+
+
+def _render_data_grid_png(data_grids: list, path: Path) -> None:
+    """把 wavefront_map 等 2D 网格分析渲染成伪彩图（固定名覆盖）。"""
+    grids = [g for g in data_grids if isinstance(g, dict) and g.get("values")]
+    if not grids:
+        raise ValueError("no plottable data grid")
+    grid = grids[0]
+    values = grid.get("values") or []
+    if not values or not values[0]:
+        raise ValueError("empty data grid")
+    # 收集有限值做色标
+    flat = [v for row in values for v in row if isinstance(v, (int, float)) and math.isfinite(v)]
+    if not flat:
+        raise ValueError("no finite values in grid")
+    vmin, vmax = min(flat), max(flat)
+    if abs(vmax - vmin) < 1e-12:
+        vmax = vmin + 1.0
+
+    ny = len(values)
+    nx = max(len(row) for row in values)
+    W, H = 900, 620
+    canvas = _new_rgb_canvas(W, H, (255, 255, 255))
+    title = str(grid.get("description") or "WAVEFRONT MAP")
+    _draw_text(canvas, 20, 12, title[:60], (30, 30, 30), scale=2)
+    label = str(grid.get("value_label") or "")
+    _draw_text(canvas, 20, 34, f"value label: {label}   range [{vmin:.4g}, {vmax:.4g}]", (90, 90, 90), scale=1)
+
+    # 绘图区
+    left, top, right, bottom = 70, 70, W - 40, H - 40
+    gw, gh = right - left, bottom - top
+    for gy in range(ny):
+        row = values[gy]
+        for gx in range(len(row)):
+            v = row[gx]
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                color = (220, 220, 220)
+            else:
+                t = (v - vmin) / (vmax - vmin)
+                t = max(0.0, min(1.0, t))
+                # 蓝→白→红 伪彩
+                if t < 0.5:
+                    r = int(60 + t * 2 * (255 - 60))
+                    g = int(60 + t * 2 * (255 - 60))
+                    b = 255
+                else:
+                    r = 255
+                    g = int(255 - (t - 0.5) * 2 * (255 - 60))
+                    b = int(255 - (t - 0.5) * 2 * (255 - 60))
+                color = (r, g, b)
+            px = left + int(gx * gw / max(1, nx - 1))
+            py = bottom - int(gy * gh / max(1, ny - 1))
+            _set_pixel(canvas, px, py, color)
+    _draw_rect(canvas, left, top, right, bottom, (120, 120, 120))
+    _draw_text(canvas, left, bottom + 14, f"{vmin:.4g}", (40, 40, 40), scale=1)
+    _draw_text(canvas, right - 60, bottom + 14, f"{vmax:.4g}", (40, 40, 40), scale=1)
     _write_png(path, canvas)
 
 
@@ -7413,7 +10168,13 @@ def _apply_operand_cell_values(row, int1=None, int2=None, **cell_values):
 
 
 def _write_operand_param(row, param_num: int, value):
-    """写入 MFE ParamN 单元格。Param1/2 优先整数，其余优先浮点。"""
+    """写入 MFE ParamN 单元格。Param1/2 优先整数，其余优先浮点。
+
+    关键（2026-10-29 实证）：某些操作数（如 MTFT/MTFS）的 Param2 是 double
+    频率字段，用 IntegerValue 写入虽然 COM 不抛异常，但 Zemax 内部会把它当成
+    枚举/索引误读（实测写 120 读回 4）。因此每次写入后必须校验 read_back，
+    若与请求值数值不符则 fallback 到下一模式（double），不能"写了没报错就返回"。
+    """
     col_idx = param_num + 1
     result = {
         "param": param_num,
@@ -7439,12 +10200,19 @@ def _write_operand_param(row, param_num: int, value):
             if mode == "int":
                 cell.IntegerValue = int(round(float(value)))
                 read_back = _jsonable_number(cell.IntegerValue)
+                expected = int(round(float(value)))
             elif mode == "double":
                 cell.DoubleValue = float(value)
                 read_back = _jsonable_number(cell.DoubleValue)
+                expected = float(value)
             else:
                 cell.Value = str(value)
                 read_back = cell.Value
+                expected = str(value)
+            # 校验 read_back：数值上应与请求值一致，否则视为写入未生效，继续下一模式
+            if not _readback_matches(read_back, expected):
+                last_error = f"read_back {read_back!r} != expected {expected!r}"
+                continue
             result.update({"ok": True, "mode": mode, "read_back": read_back})
             return result
         except Exception as e:
@@ -7454,18 +10222,37 @@ def _write_operand_param(row, param_num: int, value):
     return result
 
 
-def _write_mtf_operand_params(row, wave_idx: int, frequency: float, normalized_field: float, sampling: int = 1):
-    """Write MTFT/MTFS cells using the convention seen in Zemax MF files.
+def _readback_matches(read_back, expected) -> bool:
+    """判断写入后的 read_back 是否与请求值一致（数值容差比较）。"""
+    if read_back is None or expected is None:
+        return False
+    try:
+        rb = float(read_back)
+        ex = float(expected)
+        return abs(rb - ex) < 1e-6
+    except (TypeError, ValueError):
+        return str(read_back) == str(expected)
 
-    Layout: Param1=wave, Param2=0/all fields selector, Param3=sampling,
-    Param4=frequency, Param5=0, Param6=normalized field height.
+
+def _write_mtf_operand_params(row, field_number: int, frequency: float, wave: int = 0, sampling: int = 1):
+    """Write MTFT/MTFS cells using Zemax's actual operand layout.
+
+    Zemax MTFT/MTFS 的真实参数布局（2026-10-29 实证修正，权威出处：
+    Zemax 官方「边界操作数」文档）：
+      MTFT <Int1> <Int2> <Hx> <Hy> <Target> <Weight>
+    - Int1 (Param1) = 采样密度：1=32×32, 2=64×64, 3=128×128 ...
+    - Int2 (Param2) = 波长号：0=多色（加权）
+    - Hx  (Param3) = 视场位置：1~视场总数的整数（1=轴上, 2=第二视场...）
+    - Hy  (Param4) = 空间频率 (lp/mm)，double
+
+    旧实现曾误把 Int1 当波长、Int2 当视场、Param6 当视场，导致所有视场
+    读到相同 MTF（视场参数从未写对）。正确映射已用 get_fft_mtf_vs_field
+    的逐视场值交叉验证（轴上 0.431 / 15°边缘 0.277 与 FFT 分析一致）。
     """
-    _write_operand_param(row, 1, wave_idx)
-    _write_operand_param(row, 2, 0)
-    _write_operand_param(row, 3, sampling)
-    _write_operand_param(row, 4, float(frequency))
-    _write_operand_param(row, 5, 0.0)
-    _write_operand_param(row, 6, float(normalized_field))
+    _set_operand_int_param(row, 1, int(sampling))       # Int1 = 采样密度
+    _set_operand_int_param(row, 2, int(wave))           # Int2 = 波长(0=多色)
+    _set_operand_int_param(row, 3, int(field_number))   # Hx  = 视场号(1-based)
+    _set_operand_double_param(row, 4, float(frequency)) # Hy  = 频率 lp/mm
 
 
 def _normalized_field_heights(sys_data, conn) -> dict[int, float]:
@@ -7719,6 +10506,8 @@ _READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "generate_validation_report",
     "check_manufacturability",
     "get_glass_catalogs",
+    "set_thermal_glass_tce",   # 仅读取玻璃 TCE 报告
+    "get_tolerance_report",    # 仅汇总报告
     "update_ui",      # 本身就是刷新工具，无需再次触发
     "open_layout",    # 打开窗口后自身已做 ApplyAndWaitForCompletion
 })

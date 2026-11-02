@@ -82,8 +82,8 @@ class ProjectLogger:
         file_handler.setLevel(logging.INFO)
 
 
-        # 控制台处理器
-        console_handler = logging.StreamHandler(sys.stdout)
+        # 控制台处理器（必须走 stderr：stdout 是 MCP stdio 的 JSON-RPC 通道）
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setLevel(logging.WARNING)
 
         self.logger.addHandler(file_handler)

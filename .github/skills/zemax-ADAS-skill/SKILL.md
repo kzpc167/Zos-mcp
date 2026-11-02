@@ -13,7 +13,7 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | § | 内容 | 何时用 |
 |---|---|---|
 | 1 | 文献路由表 | 开工第一步，决定读哪篇 reference |
-| 2 | 绝对红线 R1–R17 | 动手前通读；**违反即回退** |
+| 2 | 绝对红线 R1–R25 | 动手前通读；**违反即回退** |
 | 3 | 核心参数表（枚举/阈值/公式） | 填参数时照抄 |
 | 4 | 工作流模板（路线 A / B / 渐进孔径 / 变量分阶段） | 直接照抄执行 |
 | 5 | 验收清单（9 项） | 每轮优化后逐项打勾 |
@@ -29,6 +29,7 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | 按教材/专利做多步优化，决定这一步放什么变量 | `references/staged-optimization.md` |
 | 设渐晕、VCX/VCY 取值、像质⇄照度权衡 | `references/vignetting.md` |
 | 广角 / 大视场 / 毫米级镜头 / 非球面校正板 | `references/wide-angle.md` |
+| 15 mm F/1.4 + 1/1.73" 8MP 整案（已验证流程/参数/处方） | `references/15mm-f14-1-1.73.md` |
 | 手上没有面表，要挑一个专利起点 | `references/patent-library.md`（平时别读） |
 | 工具报错、读数同值、参数没生效、枚举值、API 用法 | `references/zosmcp-troubleshooting.md` |
 | 净空判据推导、Petzval 和、等效光程、艾里斑、工程取值阈值 | `references/design-principles.md` |
@@ -65,11 +66,27 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 
 **R14 插面 / 删面 / 改光阑后：必须 `clear_operands` 重建 MFE，并复跑 `check_interference`。** 面号全错位，修补必然漏；MF 收敛得好 ≠ 结构合法。
 
-**R15 验收必须看图。** 每轮导出 2D 布局图并肉眼核对光阑/透镜是否重叠、元件是否臃肿。历史两次最严重缺陷都是看图发现的，数值全绿也照样穿模。
+**R15 验收必须看图，且必须看 3D（隐藏透镜边）+ 2D。** 3D 用 `layout_type="3D"`、`view="current"`、`angle_x/y/z=0`、`hide_lens_edges=true`，看真实面形/边缘/元件是否臃肿或畸变；2D 看光阑与透镜是否重叠、空气间隔是否被顶穿。历史两次最严重缺陷都是看图发现的，数值全绿也照样穿模。
 
 **R16 数值可疑先怀疑工具，结构可疑先怀疑拓扑。** `FCUR/ASTI` 主导且 >5 waves → 是 Petzval 天花板，继续优化/换评价函数/放宽 TOTR 全部无效，只能换玻璃重配 Σ(φ/n) 或加平场片。
 
 **R17 窗口（cover glass + IR-cut）一律用单片等效平板建模。** 两片拆开是过度建模：界面翻倍、中间薄空气层成强反射腔（`check_interference` 查不到、必出鬼影）、还多报假阳性。
+
+**R18 默认 MF 采样必须够密。** 至少 4 环 × 8 臂（`rings=3, arms=1`）+ `overall_weight≥10`；3 环 × 6 臂会让 MF 下降而原生 MTF 崩坏，优化器在钻稀疏采样的空子。
+
+**R19 验收只信原生分析。** MTF 一律读 `export_analysis_data("fft_mtf")` 的逐视场值；MTF 操作数只用于诊断，不能单独作为达标依据。
+
+**R20 对角视场异常先验对称性。** 旋转对称系统同半径性能应相同；把第 5 视场临时改成 `(0,17.29)` / `(17.29,0)` 对比，T/S 应互换。不要据此改设计。
+
+**R21 RELI 可能退化。** 本工具链里 RELI 可能对全部视场恒返回 1.0；相对照度用原生分析，主光线角用 `RAID` 控制。
+
+**R22 像圈必须显式验算。** `2 × image_semi_diameter ≥ 9.25 mm`；畸变/视场微调是最后手段，先收紧 `DIMX`。
+
+**R23 工作 F/# ≠ 像方 F/#。** 像方 1.40 可能对应实光线工作 F/# 1.46；若验收写“实际 F/1.4”，入瞳需收到约 1.35 并接受 MTF 代价。
+
+**R24 非球面一次只放 A4/A6。** 先 `Fixed_5` 核对原生 MTF，再加下一面；A8/A10 很容易把 SPHA 拉到 −30λ。
+
+**R25 `MNEA(i,i)` 可能返回 target。** 它不反映真实边缘净空；用 `MNCA` 下限约束 + `check_interference` 复核。
 
 ## 3. 核心参数表（照抄，不要凭记忆）
 
@@ -215,12 +232,16 @@ C5 set_aperture(收紧一档) → 回 C2
 | 4 | **实体净空** | `check_interference` | 光阑/镜片穿透、元件互插、最紧在轴上还是边缘 |
 | 5 | 像质 | `get_image_quality` + 点列图 | RMS/GEO；同值即工具坏 |
 | 6 | 畸变 | `get_distortion` + `get_field_curvature_distortion_data` 交叉 | 逐视场单调性、是否 <阈值 |
-| 7 | **看 2D 布局图** | `export_layout_image(2D)` + 看图 | 光阑与透镜重叠、元件臃肿 |
+| 7 | **看 3D（隐藏透镜边）+ 2D 布局图** | `export_layout_image(3D, hide_lens_edges=true)` + `export_layout_image(2D)` + 看图 | 3D 看真实面形/边缘/元件是否臃肿；2D 看光阑与透镜重叠、间隔顶穿 |
 | 8 | 罚项构成 | `get_merit_breakdown(top_n=10)` | 恒定厚度偏置（锁死厚度造成） |
 
 **第 0 项为什么排第一**：矩形 sensor 的对角视场 ≠ 子午边缘视场，必须显式加 `(H_half, V_half)` 那个点；只看子午视场会得出"全绿"的错误结论。波长同理，只给 F/d/C 的"可见光 ✅"是三条谱线。
 
-**出图规范**：`export_layout_image` 分别串行导出 `layouts/layout_3D.png`（0/0/0）与 `layouts/layout_2D.png`；点列图 `export_spot_diagram_image(show_airy=True)` → `layouts/spot_diagram.png`。固定文件名、覆盖式，不带日期后缀。导出失败必须明确报告，不得拿另一种视图冒充。
+**出图规范**：`export_layout_image` 必须串行导出两张——
+- **3D**：`layout_type="3D"`、`view="current"`、`angle_x=0`、`angle_y=0`、`angle_z=0`、`hide_lens_edges=true` → `layouts/layout_3D.png`。**隐藏透镜边后才能看清真实面形与边缘，是自查“透镜是否合理”的必看项**（弯月过深、面形鼓包、边缘相交、玻璃砖）。
+- **2D**：`layout_type="2D"` → `layouts/layout_2D.png`，核对光阑/透镜重叠与空气间隔。
+
+点列图 `export_spot_diagram_image(show_airy=True)` → `layouts/spot_diagram.png`。固定文件名、覆盖式，不带日期后缀。导出失败必须明确报告，不得拿另一种视图冒充。
 
 ## 6. 异常决策树
 

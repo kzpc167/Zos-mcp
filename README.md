@@ -1,11 +1,11 @@
 # Zemax MCP 工具链
 
-用自然语言驱动 Ansys Zemax OpticStudio 做光学设计 —— 将 62 个 Zemax 工具封装为 MCP 工具，另提供 1 个服务器重连工具，共向客户端提供 63 个工具。任何支持 MCP 的 Agent 客户端（WorkBuddy / VS Code Copilot / Claude Desktop）都能直接调用。
+用自然语言驱动 Ansys Zemax OpticStudio 做光学设计 —— 将 73 个 Zemax 工具封装为 MCP 工具，另提供 1 个服务器重连工具，共向客户端提供 74 个工具。任何支持 MCP 的 Agent 客户端（WorkBuddy / VS Code Copilot / Claude Desktop）都能直接调用。
 
 ## 一句话架构
 
 ```
-Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py (62 个 Zemax 工具)  ──▶  ZOS-API (COM)  ──▶  OpticStudio
+Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py (73 个 Zemax 工具)  ──▶  ZOS-API (COM)  ──▶  OpticStudio
 ```
 
 服务器本身**不启动 Zemax**，它连接到正在运行的 OpticStudio 实例。
@@ -44,6 +44,8 @@ copy .env.example .env        # ZEMAX_MODE=extension, ZEMAX_INSTANCE=0
 | 优化      | `run_optimization` `quick_focus`                                                                                                                                                                                                                                                                                                                                                                                       |
 | 像质分析  | `get_mtf` `get_mtf_curve` `get_fft_mtf_vs_field` `get_spot_diagram_data` `get_opd_fan_data` `get_ray_fan_data` `get_wavefront_map_data` `get_image_quality` `get_aberrations` `get_distortion` `get_field_curvature_distortion_data` `get_lateral_color_data` `get_longitudinal_aberration_data` `get_relative_illumination_data` `get_vignetting_diagram_data` `check_field_illumination` |
 | 一阶/材料 | `get_first_order_data` `get_glass_catalogs` `set_glass_catalogs` `set_ray_aiming` `get_ray_aiming_settings`                                                                                                                                                                                                                                                                                                      |
+| 无热化    | `set_temperature_configs` `add_thermal_pickup_solve` `set_thermal_glass_tce` `optimize_athermal` `get_thermal_defocus`                                                                                                                                                                                                                                                                                                  |
+| 公差分析  | `set_tolerances` `run_tolerance_sensitivity` `run_tolerance_monte_carlo` `get_tolerance_report` `set_tolerance_compensator`                                                                                                                                                                                                                                                                                              |
 | 交付      | `open_layout` `export_analysis_data` `generate_validation_report` `check_manufacturability`                                                                                                                                                                                                                                                                                                                        |
 
 ## 已完成的案例
@@ -67,30 +69,38 @@ copy .env.example .env        # ZEMAX_MODE=extension, ZEMAX_INSTANCE=0
 
 ```
 mcp_server.py        MCP 协议入口（stdio，工具声明与路由）
-tools.py             62 个 Zemax 工具的实现 + JSON Schema
+tools.py             73 个 Zemax 工具的实现 + JSON Schema
 zemax_connection.py  ZOS-API 连接与会话管理
 logger.py            日志（滚动、多进程安全）
-.github/skills/      Zemax 技能真源（入库，Copilot 与队友读取）
-.dsh/skills/         DSH 项目级 Zemax 技能副本（由 sync_skills.py 生成并入库）
-.workbuddy/skills/   WorkBuddy 本机技能目录（不是真源，不入库）
-scripts/             技能同步与 WorkBuddy 重启脚本
+.github/skills/      Zemax 技能真源（唯一物理副本，入库；Copilot 与队友读取）
+.workbuddy/skills/   软链(Junction) → .github/skills，供 WorkBuddy 读取（不入库）
+.dsh/skills/         软链(Junction) → .github/skills，供 DSH 读取（不入库）
+scripts/             WorkBuddy 重启脚本与探针脚本
 zemax-ADAS/          设计案例文件
 ```
 
 ## 技能（skills）
 
-`.github/skills/` 是项目 Zemax 技能的真源，供 Copilot 和队友使用；`.dsh/skills/` 是同步给 DSH 的入库副本。`.workbuddy/skills/` 只是本机 WorkBuddy 使用的目录，不是真源。
+技能只有**一份物理副本**：`.github/skills/`（入库）。另外两个路径是指向它的 Windows 目录软链，
+从任一路径读写都会立刻体现在其他路径，所以多 agent 共同编写时不会出现内容漂移。
 
-| 目标                | 谁读                                                                  | 入库 |
-| ------------------- | --------------------------------------------------------------------- | ---- |
-| `.github/skills/` | VS Code Copilot、队友；项目 Zemax 技能真源                            | 是   |
-| `.dsh/skills/`    | DSH 项目级（rank 100，优先于全局）；由脚本从 `.github/skills/` 同步 | 是   |
-| `~/.dsh/skills/`  | DSH 全局（通用技能）                                                  | 否   |
+| 路径                  | 谁读                                             | 与真源的关系        | 入库 |
+| --------------------- | ------------------------------------------------ | ------------------- | ---- |
+| `.github/skills/`     | VS Code Copilot、队友；项目 Zemax 技能**真源**   | 物理目录本身        | 是   |
+| `.workbuddy/skills/`  | WorkBuddy 项目级                                 | Junction（目录软链）| 否   |
+| `.dsh/skills/`        | DSH 项目级（rank 100，优先于全局）               | Junction（目录软链）| 否   |
+| `~/.dsh/skills/`      | DSH 全局（通用技能）                             | 独立目录            | 否   |
 
-```bash
-python scripts/sync_skills.py          # 从 .github/skills 同步 Zemax 技能到 .dsh/skills
-python scripts/sync_skills.py --check  # 只检查漂移，有差异退出码 1
-```
+> **软链不会被 git 克隆出来。** 新克隆仓库或换机器后 `.workbuddy/skills`、`.dsh/skills` 都不存在，
+> 对应 agent 就看不到项目级技能。此时手工重建两条 Junction（`cmd` 里执行，无需管理员权限）：
+>
+> ```bat
+> mklink /J "D:\Zemax-mcp\.workbuddy\skills" "D:\Zemax-mcp\.github\skills"
+> mklink /J "D:\Zemax-mcp\.dsh\skills"      "D:\Zemax-mcp\.github\skills"
+> ```
+>
+> 重建后验证：`dir /AL` 应能看到两行 `<JUNCTION>`；再确认任一 agent 里四个项目技能都能列出。
+> （原先的自动检查脚本 `scripts/sync_skills.py` 已于 2026-10-27 按用户要求删除，软链长期存在、无需常驻校验。）
 
 - 项目级四个：`system-setup-by-type`、`zemax-ADAS-skill`、`zemax-optical-design`、`zemax-zoom-lens-design`
 
