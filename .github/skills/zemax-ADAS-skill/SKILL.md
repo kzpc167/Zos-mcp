@@ -29,11 +29,13 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | 按教材/专利做多步优化，决定这一步放什么变量 | `references/staged-optimization.md` |
 | 设渐晕、VCX/VCY 取值、像质⇄照度权衡 | `references/vignetting.md` |
 | 广角 / 大视场 / 毫米级镜头 / 非球面校正板 | `references/wide-angle.md` |
-| 15 mm F/1.4 + 1/1.73" 8MP 整案（已验证流程/参数/处方） | `references/15mm-f14-1-1.73.md` |
+| 15 mm F/1.4 + 1/1.73" 8MP 车载长焦前摄整案（已验证流程/参数/处方） | `references/15mm-f14-1-1.73.md` |
 | 手上没有面表，要挑一个专利起点 | `references/patent-library.md`（平时别读） |
 | 工具报错、读数同值、参数没生效、枚举值、API 用法 | `references/zosmcp-troubleshooting.md` |
-| 净空判据推导、Petzval 和、等效光程、艾里斑、工程取值阈值 | `references/design-principles.md` |
+| 净空判据推导、Petzval 和、等效光程、艾里斑、工程取值阈值、**弯曲因子 \|B\| 的评价函数链** | `references/design-principles.md` |
 | 「这个结果算好还是坏」、历史版本对比、事故复盘 | `references/cases-and-history.md` |
+| 非球面 k 受控优化、A4/A6 交替固定、反曲判定与消除、非球面度、通光口径、边缘厚 vs MTF 冲突 | 独立 skill `zemax-asphere-skill` |
+| 鬼影、强光源重影、杂散光、GISET/PST、镀膜反射率、非序列建模 | 独立 skill `zemax-ghost-skill` |
 | 具体项目的面表/半口径/玻璃链快照 | `zemax-ADAS/*_设计报告.md`（不进 skill） |
 
 ## 2. 绝对红线（违反即本轮作废，必须回退重跑）
@@ -87,6 +89,22 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 **R24 非球面一次只放 A4/A6。** 先 `Fixed_5` 核对原生 MTF，再加下一面；A8/A10 很容易把 SPHA 拉到 −30λ。
 
 **R25 `MNEA(i,i)` 可能返回 target。** 它不反映真实边缘净空；用 `MNCA` 下限约束 + `check_interference` 复核。
+
+**R26 优化 k 时 A4/A6+ 必须显式固定。** "没改它" ≠ "不是变量"；先 `make_variable(param="A4"/"A6", variable=false)`。A4 只在 k 收敛且落在边界内之后才允许释放，且不得在 k 优化阶段同时放 A4 及以上。
+
+**R27 k 边界用 `COVA` + `OPGT/OPLT` 夹住，且权重必须足够。** 小越界（<0.001）时权重 100 会被 MTF/OPDM 压穿，需加大到 10000；边界目标向内留余量（要求 [−2,1] 时用 [−1.95,0.95]）。优化后必须 `get_operands` 读回 k，不能只看返回值 ok。
+
+**R28 每轮优化后必须做面型检查。** 输出边缘矢高、边缘斜率、斜率是否变号、曲率是否变号：**斜率变号 = 反曲，不合格**；`z''` 变号 = 拐点，必须显式报告；边缘斜率 >约 30° 视为偏陡。反曲还必须给出「反曲点 − 通光半径」的余量（<5% 算贴线）。**面斜率在 MFE 里读不到**（`SDRV`/`SSAG` 参数写不进），只能解析计算 + `CVGT` 卡顶点曲率。公式与判定见 `zemax-asphere-skill` §3。
+
+**R29 `DIFF`/`SUMM` 复合操作数不参与 DLS 求导。** 它们会计入评价函数值（breakdown 里贡献很大），但优化器不会沿其梯度移动；不要用它们驱动优化，用原生 `CVGT/CVLT` 或手动扫描。
+
+**R30 `get_image_quality` 对离轴视场固定 `Hx=0`。** field 4/5 读到的是子午点而不是对角点；对角视场一律用 `get_mtf(frequency=…)` 或 `get_fft_mtf_vs_field`。
+
+**R31 默认 MF 重建后要逐行读回 MTF 行。** `set_default_merit_function(start_at=…)` 可能把前面的 `MTFT/MTFS` 行 `Hx` 重置为 1（视场 1），导致高视场实际无约束；重建后核对每条 MTF 的 `Hx`。
+
+**R32 打开当前已激活路径的备份可能不重新加载，且可能把内存状态写回该文件。** 恢复快照前先把备份复制成**新文件名**，再 `open_file` 副本；不要直接打开原备份路径。
+
+**R33 极端弯月用「曲率链」约束，别只盯着看。** Zemax 无弯曲因子操作数，`check_manufacturability` 的 `bend_factor_B` 只是读数。`B > −5` 化成 **`c2 > 1.5c1`**（线性）；`\|B\| < 5` 化成 **`5\|c2−c1\| − \|c1+c2\| > 0`**（配 `ABSO`，正负弯月与 R 变号全域有效）。**禁用 `DIVB`**（Param2 写不进，值恒 0）。卡在 −5.01 贴线时把 target 抬 3e−4 给裕量，一次即过；达标后 target 改回真实阈值。链见 `design-principles.md` §P6.6，坑见 `zosmcp-troubleshooting.md` §T17。
 
 ## 3. 核心参数表（照抄，不要凭记忆）
 
@@ -232,14 +250,14 @@ C5 set_aperture(收紧一档) → 回 C2
 | 4 | **实体净空** | `check_interference` | 光阑/镜片穿透、元件互插、最紧在轴上还是边缘 |
 | 5 | 像质 | `get_image_quality` + 点列图 | RMS/GEO；同值即工具坏 |
 | 6 | 畸变 | `get_distortion` + `get_field_curvature_distortion_data` 交叉 | 逐视场单调性、是否 <阈值 |
-| 7 | **看 3D（隐藏透镜边）+ 2D 布局图** | `export_layout_image(3D, hide_lens_edges=true)` + `export_layout_image(2D)` + 看图 | 3D 看真实面形/边缘/元件是否臃肿；2D 看光阑与透镜重叠、间隔顶穿 |
+| 7 | **看 3D 布局图（隐藏透镜边）** | `export_layout_image(3D, hide_lens_edges=true)` + 看图 | 真实面形/边缘/元件是否臃肿、弯月过深、面形鼓包、边缘相交、玻璃砖、光阑与透镜重叠、间隔顶穿（**3D 一张看全部，2D 已废弃**） |
 | 8 | 罚项构成 | `get_merit_breakdown(top_n=10)` | 恒定厚度偏置（锁死厚度造成） |
 
 **第 0 项为什么排第一**：矩形 sensor 的对角视场 ≠ 子午边缘视场，必须显式加 `(H_half, V_half)` 那个点；只看子午视场会得出"全绿"的错误结论。波长同理，只给 F/d/C 的"可见光 ✅"是三条谱线。
 
-**出图规范**：`export_layout_image` 必须串行导出两张——
+**出图规范**：`export_layout_image` **只导 3D 一张**（用户 2026-11-03 明确要求：取消二维布局图）——
 - **3D**：`layout_type="3D"`、`view="current"`、`angle_x=0`、`angle_y=0`、`angle_z=0`、`hide_lens_edges=true` → `layouts/layout_3D.png`。**隐藏透镜边后才能看清真实面形与边缘，是自查“透镜是否合理”的必看项**（弯月过深、面形鼓包、边缘相交、玻璃砖）。
-- **2D**：`layout_type="2D"` → `layouts/layout_2D.png`，核对光阑/透镜重叠与空气间隔。
+- ~~2D：`layout_type="2D"` → `layouts/layout_2D.png`~~ —— **不再导出、不再打开、`present_files` 里也不放**。光阑/透镜重叠与空气间隔一律用 `check_interference` 的数值判定，不靠 2D 图目视。
 
 点列图 `export_spot_diagram_image(show_airy=True)` → `layouts/spot_diagram.png`。固定文件名、覆盖式，不带日期后缀。导出失败必须明确报告，不得拿另一种视图冒充。
 
@@ -256,6 +274,8 @@ C5 set_aperture(收紧一档) → 回 C2
 | MF 很低但边缘 MTF 差 | `get_aberrations` 看 FCUR/ASTI | `design-principles.md` §P2 |
 | 想加非球面救场曲 | 停。非球面不进 Petzval 和 | `design-principles.md` §P2 |
 | 元件 \|B\| 极大 / SD/CT 看着像砖 | 拆单片算 f 与相对孔径 | `design-principles.md` §P6 |
+| 要把 \|B\| 压回 5 以内（评价函数怎么做） | 用曲率链，禁用 `DIVB` | `design-principles.md` §P6.6 + `zosmcp-troubleshooting.md` §T17 |
+| 删/插面后新增的操作数在 MFE 里翻不到 | 是否用默认 append 追加到末尾（违 R10） | 重建成 `insert_at=1`，见 `zosmcp-troubleshooting.md` §T17 末 |
 | CRA 超标 | 场镜靠像面 + 温和 RAID（R12） | `cases-and-history.md` §C4.8 + `design-principles.md` §P11 |
 | 相对照度偏低 | `get_relative_illumination_data`（原生），**不要**用 `check_field_illumination` | `design-principles.md` §P9 |
 | 点列图艾里圈包住全部光点，但界面圈很小 | 圈是脚本算的，非 Zemax 原生 | `zosmcp-troubleshooting.md` §T14 |

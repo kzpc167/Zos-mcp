@@ -1,0 +1,50 @@
+{
+  "面 1 (S1, L1 前)": {
+    "slope_max_deg": 3.6161916228099025,
+    "slope_max_at": 4.10753465724587,
+    "slope_edge_deg": 2.7773045839070782,
+    "slope_sign_edge": "负(下翻)",
+    "inflection_r": [
+      6.844514277603986
+    ],
+    "inflection_inside": true,
+    "bfs_R": 88.31957178326519,
+    "bfs_max_dev_um": 97.49331223886148,
+    "bfs_pv_um": 137.59394528397826,
+    "bfs_dev_at_edge_um": -97.49331223886148,
+    "vertex_sphere_dev_um": 390.83538693317297,
+    "Rloc_center": 44.39296915683807,
+    "Rloc_edge": 13.032795020809255,
+    "Rloc_min": 13.032795020809255,
+    "Rloc_max": 92017.68975565118,
+    "Rloc_min_at": 7.592485503227117,
+    "dR_max_abs": 19636767.914217617,
+    "dR_max_at": 4.103738414494257,
+    "Rloc_ratio": 7060.472416601965,
+    "curv_inflection_r": [
+      4.108423676921829
+    ]
+  },
+  "面 13 (S12, L7 前)": {
+    "slope_max_deg": 27.65489337665561,
+    "slope_max_at": 4.849611410756276,
+    "slope_edge_deg": 27.65489337665561,
+    "slope_sign_edge": "负(下翻)",
+    "inflection_r": [],
+    "inflection_inside": false,
+    "bfs_R": -8.119761391351652,
+    "bfs_max_dev_um": 97.97405695846639,
+    "bfs_pv_um": 142.13176683344363,
+    "bfs_dev_at_edge_um": 97.97405695846639,
+    "vertex_sphere_dev_um": 631.7907780994132,
+    "Rloc_center": 6.482159673955799,
+    "Rloc_edge": 167.43911175710505,
+    "Rloc_min": 6.482159673955799,
+    "Rloc_max": 167.43911175710505,
+    "Rloc_min_at": 0.0,
+    "dR_max_abs": 1288.4005999638468,
+    "dR_max_at": 4.847186605050898,
+    "Rloc_ratio": 25.8307601446238,
+    "curv_inflection_r": []
+  }
+}

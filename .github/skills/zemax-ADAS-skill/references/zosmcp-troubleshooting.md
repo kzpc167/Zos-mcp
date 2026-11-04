@@ -308,3 +308,37 @@ MNEA(光阑面, 下一镜面) ≥净空   ★
 | `clear_operands` / `edit_operand` / `remove_surface` | 在 `<文件目录>/backups/` 生成 .zos/.ZDA 备份；用户不要时完工后删除 |
 
 **文件格式**：`.zos`（Zemax 2024）是**二进制**，`grep`/`head` 读不出内容。判面数/结构一律走 `get_system_info`；判版本可粗看大小（车载 52KB ≈ 18 面旧版、131KB ≈ 20 面场镜版）。
+
+---
+
+## T17. `DIVB` 的 Param2 写不进 —— 比值类约束一律「化除法」
+
+**实测（2026-11-04）**：`add_operand(operand_type="DIVB", int1=279, int2=277)` 返回
+`ok: true`，但 `write_results` 里 Param2 一直是失败，`read_back` 是**空字符串**：
+
+```
+{"param": 2, "name": "int2", "col": 3, "requested": 277, "ok": false,
+ "error": "read_back '' != expected '277'"}
+```
+
+三种写入模式（`IntegerValue` / `DoubleValue` / `Value`）全部落空，
+`edit_operand` 重试也无效。结果 DIVB 的 `value` 恒为 0，引用第 0 行（无效）。
+
+**对照**：同一位置 `SUMM` / `DIFF` / `PROD` 的 Param2 **完全正常**（`read_back` 逐位一致），
+所以不是 col 3 的通用问题，是 `DIVB` 这个操作数本身的问题。
+
+**处置：不要用 `DIVB`。** 任何"比值 > 阈值"的约束都先代数化掉除法：
+
+| 原式 | 化成 | 操作数 |
+|---|---|---|
+| `x/y > k`（y>0） | `x − k·y > 0` | `CONS(k)` + `PROD` + `DIFF` + `OPGT` |
+| `\|x/y\| < k` | `k\|y\| − \|x\| > 0` | 两个 `ABSO` + `PROD` + `DIFF` + `OPGT` |
+| 弯曲因子 B（见 `design-principles.md` §P6.6） | `c2 > 1.5c1` 或 `5\|Δc\|−\|Σc\| > 0` | 同上 |
+
+`CONS` 的返回值就是它的 Target，可直接当常数参与 `PROD`。
+
+**顺带两条 `build_operand_block` 的规则**：
+1. `int1_ref/int2_ref` **只能引用本次调用新建的 label**；引用历史行（如已有的 279）必须写死行号。
+2. `insert_at=1` 时 `next_insert` 逐行递增，前面已插入的行不会后移，label→行号映射可靠；
+   但"把已存在的块挪到最前面"要**重建 + 删原块**（先插到 1，原块整体后移 N 行，再 `remove_operands(rows=原起始+N .. 原结束+N)`），
+   校验 `num_operands` 回到原值、`get_merit_breakdown` 的 top 行号变成个位数。
