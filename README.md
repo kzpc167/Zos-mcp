@@ -20,7 +20,9 @@ Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py（74 �
 > **同机不要用两个客户端同时接 extension**。一个 Zemax 实例只服务一个客户端会话，交替连接会把 .NET Remoting 注册状态搞烂，表现为所有槽位 `RemotingException`——重启 Zemax 无效，只能重启电脑。另一侧请改用 `--zemax-mode standalone`。
 
 ## 快速开始
+
 大喊一声：deepseek救我，让AI帮你安装并配置环境。
+
 ```bash
 # 1. 依赖（Python 3.13）
 python -m venv .venv
@@ -36,8 +38,6 @@ copy .env.example .env        # ZEMAX_MODE=extension, ZEMAX_INSTANCE=0
 ```
 
 启动后第一次工具调用会自动连 Zemax（失败重试 2 次），也可手动调 `reconnect_zemax`（重试 3 次）。
-
-> WorkBuddy 只在**启动时**读 `~/.workbuddy/mcp.json`，外部改文件不会热加载；改完需在应用内保存一次或重启，再到连接器页点「信任」。
 
 ## 工具分类
 
@@ -61,7 +61,7 @@ copy .env.example .env        # ZEMAX_MODE=extension, ZEMAX_INSTANCE=0
 | ----------------------------- | ---------------- | ----------------------------------------------------------------------------------- |
 | 焦距 / F 数                   | 15 ± 5 % / F1.4 | **15.118 mm**（+0.79 %）/ **F/1.400**                                   |
 | 视场                          | 2ω 35°         | **2ω 34.85°**，水平 30.2°                                                  |
-| 总长                          | 30 ± 2 %        | **30.499 mm**                                                                 |
+| 总长                          | 30.5 ± 2 %     | **30.499 mm**                                                                 |
 | 畸变                          | ≈ 1 %           | **0.394 %**                                                                   |
 | 像圈                          | > 9.25 mm        | **9.46 mm**                                                                   |
 | MTF@120 lp/mm                 | > 0.5            | 轴上 0.597 / 全视场 **0.447**（唯一未达标，Petzval 场曲固有弱项，已判定接受） |
