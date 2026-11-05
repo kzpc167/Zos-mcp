@@ -20,7 +20,7 @@ Agent 客户端  ──stdio──▶  mcp_server.py  ──▶  tools.py（74 �
 > **同机不要用两个客户端同时接 extension**。一个 Zemax 实例只服务一个客户端会话，交替连接会把 .NET Remoting 注册状态搞烂，表现为所有槽位 `RemotingException`——重启 Zemax 无效，只能重启电脑。另一侧请改用 `--zemax-mode standalone`。
 
 ## 快速开始
-
+大喊一声：deepseek救我
 ```bash
 # 1. 依赖（Python 3.13）
 python -m venv .venv
