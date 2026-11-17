@@ -1,42 +1,43 @@
 ---
 name: zemax-ADAS-skill
-description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角物镜主线）。用 zosmcp MCP 工具做 Zemax 镜头设计：两条起步路线（平面起步法 / 专利·教材起步法）、教材四步法分阶段优化、评价函数与护栏配置、孔径渐进、光阑净空、畸变与 CRA 控制、非球面、窗口等效平板、验收与异常排查。Use when: 设计 ADAS 或相机镜头、双高斯物镜、广角物镜、按教材/专利数据建模、分阶段优化、评价函数优化、EFFL 保焦距、替代玻璃替换、Hammer 全局优化、渐晕拦光、负畸变控制、CRA 远心化、优化后出现玻璃砖/负空气间隔/光阑与透镜重叠/多视场读数完全相同等异常排查。'
+description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角物镜主线）。用 zosmcp MCP 工具做 Zemax 镜头设计：两条起步路线（平面起步法 / 专利·教材起步法）、教材四步法分阶段优化、评价函数与护栏配置、孔径渐进、光阑净空、畸变与 CRA 控制、非球面、窗口等效平板、验收与异常排查。Use when: 设计 ADAS 或相机镜头、双高斯物镜、广角物镜、按教材/专利数据建模、分阶段优化、评价函数优化、EFFL 保焦距、替代玻璃替换、Hammer 全局优化、渐晕拦光、负畸变控制、CRA 远心化、优化后出现玻璃砖/负空气间隔/光阑与透镜重叠/多视场读数完全相同等异常排查。优化变量必须按 references/staged-optimization.md 分阶段放开，禁止一次全放；references 按动作强制加载。'
 ---
 
 # ADAS 镜头设计执行规程
 
 > 全部操作经 `mcp__zemax-opticstudio__*` 完成。**不新建 Python 脚本、不手写 .zmx**。
-> 本文件只写「怎么做、不许怎么做、做完查什么」。原理与数据在 references，按 §1 路由表按需加载。
+> 本文件只写「触发规则、红线、参数速查、验收与路由」；具体步骤序列在 `references/workflows.md`，原理与数据在其余 references，按 §1 触发规则**强制加载**（不是按需）。
 
-**本文件结构**
+## 1. 文献加载规则（按动作触发，不是"按需查阅"）
 
-| § | 内容 | 何时用 |
+**references 不是背景资料，是执行前的必读前置条件。** 三条规则：
+
+1. 下表每行是一个**触发动作**。做该动作**之前**先读对应文件；只读列出的节也算读。同时触发多行 → 全部读完再动，顺序：设计思路 → 操作数 → 分阶段。
+2. 读完在回复里写一行 `已加载：<文件名> §<节>`，再执行动作。**没写这行 = 没读，动作无效。**
+3. **禁止开工前一次性读完整个 references**（费上下文且记不住）；只按当前动作加载。同一设计任务内已读即算，换阶段不必重读。
+
+| 触发动作（准备调用…） | 必读（先读再动） | 不读就禁止做 |
 |---|---|---|
-| 1 | 文献路由表 | 开工第一步，决定读哪篇 reference |
-| 2 | 绝对红线 R1–R25 | 动手前通读；**违反即回退** |
-| 3 | 核心参数表（枚举/阈值/公式） | 填参数时照抄 |
-| 4 | 工作流模板（路线 A / B / 渐进孔径 / 变量分阶段） | 直接照抄执行 |
-| 5 | 验收清单（9 项） | 每轮优化后逐项打勾 |
-| 6 | 异常决策树 | 出症状时按行索骥 |
-| 7 | 存档与协作约定 | 保存、备份、多 agent 并发 |
+| 开工 / 规格澄清 / 选结构 / 定起步 / 判收敛发散 / 像差平衡 / 决定推倒重来 | `references/design-thinking.md` | 改拓扑、换结构、下"没救了"结论 |
+| **任何 `make_variable`（含 `param="material"`）或 `run_optimization`** | **`references/staged-optimization.md` 全文** + `references/operands.md` §三/§四 | **一次放开全部变量；没贴阶段表就开跑** |
+| 按路线执行优化、确认下一步顺序、抄步骤序列 | `references/workflows.md`（W1~W3） | 凭记忆拼步骤、漏掉验收 |
+| 建/改 MF、加操作数、定 target/权重 | `references/operands.md`（§二选型 / §四权重 / §五实操） | `add_operand` / `set_default_merit_function` / 改权重 |
+| 广角 / 大视场 / 毫米级 / 非球面校正板 | `references/wide-angle.md` | 把双高斯套路套到广角 |
+| 15 mm F/1.4 车载长焦同类项目 | `references/15mm-f14-1-1.73.md` | 不读就自行重跑已验证流程 |
+| 没有面表，要挑专利起点 | `references/patent-library.md` | 凭记忆写专利面表 |
+| 工具报错 / 读数同值 / 参数没生效 / 枚举 / API | `references/zosmcp-troubleshooting.md`（对应 T 节） | 原样重试同一失败调用 |
+| 净空判据 / Petzval / 等效光程 / 艾里斑 / 工程阈值 / 渐晕 P10 / **\|B\| 评价函数链** | `references/design-principles.md`（对应 P 节） | 凭感觉定净空、上限、权重、渐晕 |
+| 判"结果好坏" / 历史对比 / 事故复盘 / 异常现场排障 | `references/cases-and-history.md`（先查 C5） | 凭直觉改设计、连续试错、不查 C5 |
+| 非球面 k / A4·A6 / 反曲 / 面型验收 | 独立 skill `zemax-asphere-skill` | — |
+| 鬼影 / 杂散光 / GISET·PST / 镀膜 | 独立 skill `zemax-ghost-skill` | — |
+| 报告级出图 / 统计（良率·CPK·CI）/ 拟合（热离焦）/ 面型导数与反曲 | 独立 skill `zemax-matlab-skill`（**必须实际调用 MATLAB**） | 用 Python / 手算冒充 MATLAB 交付结果 |
+| 项目面表 / 半口径 / 玻璃链快照 | `zemax-ADAS/*_设计报告.md`（不进 skill） | — |
 
-## 1. 文献路由表（先读这条再往下）
+**优化前置门 M1–M3（违反即本轮作废）**
 
-| 你要做的事 | 读哪篇 |
-|---|---|
-| 选结构、定起步、判断收敛/发散、像差怎么平衡 | `references/design-thinking.md` |
-| 配评价函数、选操作数、定 target/权重、边界型 vs 目标型 | `references/operands.md` |
-| 按教材/专利做多步优化，决定这一步放什么变量 | `references/staged-optimization.md` |
-| 设渐晕、VCX/VCY 取值、像质⇄照度权衡 | `references/vignetting.md` |
-| 广角 / 大视场 / 毫米级镜头 / 非球面校正板 | `references/wide-angle.md` |
-| 15 mm F/1.4 + 1/1.73" 8MP 车载长焦前摄整案（已验证流程/参数/处方） | `references/15mm-f14-1-1.73.md` |
-| 手上没有面表，要挑一个专利起点 | `references/patent-library.md`（平时别读） |
-| 工具报错、读数同值、参数没生效、枚举值、API 用法 | `references/zosmcp-troubleshooting.md` |
-| 净空判据推导、Petzval 和、等效光程、艾里斑、工程取值阈值、**弯曲因子 \|B\| 的评价函数链** | `references/design-principles.md` |
-| 「这个结果算好还是坏」、历史版本对比、事故复盘 | `references/cases-and-history.md` |
-| 非球面 k 受控优化、A4/A6 交替固定、反曲判定与消除、非球面度、通光口径、边缘厚 vs MTF 冲突 | 独立 skill `zemax-asphere-skill` |
-| 鬼影、强光源重影、杂散光、GISET/PST、镀膜反射率、非序列建模 | 独立 skill `zemax-ghost-skill` |
-| 具体项目的面表/半口径/玻璃链快照 | `zemax-ADAS/*_设计报告.md`（不进 skill） |
+- **M1 先表后跑**：`make_variable` / `run_optimization` 之前，回复里必须先贴「阶段表」——`阶段 | 放开变量 | 固定变量 | 算法 | 停止判据`，依据 `staged-optimization.md` 的「四步法骨架」+ `workflows.md` W4。**没有阶段表就调用 = 违规，立即回退。**
+- **M2 按阶段表放，不按"全部"放**：新增变量必须与阶段表逐条对应；禁止把「全部半径 + 全部厚度 + 全部间隔 + 玻璃」一次性设为变量。第 1 步只放 10 半径 + 正透镜厚 + 光阑前后空气，负透镜厚与其余空气间隔保持固定（理由见 `staged-optimization.md` 第 2.2 节）；批内顺序按第 3 节状态机 A1→A3、B1→B4 逐批加入。"先全放再收"是禁止路线。
+- **M3 每阶段物理验收**：`get_system_info` + `get_merit_breakdown` + `check_interference`；MF 降幅 <1% 的变量固定回去，再进下一阶段。
 
 ## 2. 绝对红线（违反即本轮作废，必须回退重跑）
 
@@ -68,7 +69,7 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 
 **R14 插面 / 删面 / 改光阑后：必须 `clear_operands` 重建 MFE，并复跑 `check_interference`。** 面号全错位，修补必然漏；MF 收敛得好 ≠ 结构合法。
 
-**R15 验收必须看图，且必须看 3D（隐藏透镜边）+ 2D。** 3D 用 `layout_type="3D"`、`view="current"`、`angle_x/y/z=0`、`hide_lens_edges=true`，看真实面形/边缘/元件是否臃肿或畸变；2D 看光阑与透镜是否重叠、空气间隔是否被顶穿。历史两次最严重缺陷都是看图发现的，数值全绿也照样穿模。
+**R15 验收必须看 3D 布局图（隐藏透镜边）。** 用 `layout_type="3D"`、`view="current"`、`angle_x/y/z=0`、`hide_lens_edges=true`，看真实面形/边缘/元件是否臃肿或畸变。光阑/透镜重叠与间隔顶穿用 `check_interference` 数值判定，不靠 2D 目视。历史两次最严重缺陷都是看图发现的，数值全绿也照样穿模。
 
 **R16 数值可疑先怀疑工具，结构可疑先怀疑拓扑。** `FCUR/ASTI` 主导且 >5 waves → 是 Petzval 天花板，继续优化/换评价函数/放宽 TOTR 全部无效，只能换玻璃重配 Σ(φ/n) 或加平场片。
 
@@ -106,6 +107,8 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 
 **R33 极端弯月用「曲率链」约束，别只盯着看。** Zemax 无弯曲因子操作数，`check_manufacturability` 的 `bend_factor_B` 只是读数。`B > −5` 化成 **`c2 > 1.5c1`**（线性）；`\|B\| < 5` 化成 **`5\|c2−c1\| − \|c1+c2\| > 0`**（配 `ABSO`，正负弯月与 R 变号全域有效）。**禁用 `DIVB`**（Param2 写不进，值恒 0）。卡在 −5.01 贴线时把 target 抬 3e−4 给裕量，一次即过；达标后 target 改回真实阈值。链见 `design-principles.md` §P6.6，坑见 `zosmcp-troubleshooting.md` §T17。
 
+**R34 优化必须先过 §1 的 M1–M3 前置门。** 未加载 `staged-optimization.md`、未在回复里贴阶段表就 `make_variable` / `run_optimization` = 违规；**严禁一次放开全部半径 + 厚度 + 玻璃**（"先全放再收"是禁止路线，必出退化解）。
+
 ## 3. 核心参数表（照抄，不要凭记忆）
 
 ### 3.1 枚举与语义
@@ -122,122 +125,22 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | `GMTT/GMTS` | Field / Freq 在 **Hx / Hy** 列，不在 Int3/Int4 |
 | 平面 | 传 `"Infinity"`（`1e15`/`Infinity`/`平面` 均可），**不要写 1e18** |
 
-### 3.2 工程阈值（15 mm 级车载；大镜头另议）
+### 3.2 工程阈值（只记最常用的，完整分级见 `design-principles.md` §P14）
 
-| 项 | 取值 | 备注 |
+15 mm 级车载：光阑↔镜片边缘净空 **0.25~0.4 mm**；片间中心间隔 **≥0.2~0.3 mm**；加工四项 CT≥1.0 / ET≥0.5 / SD/CT≤3.5 / min\|R\|≥3（毫米级按比例缩）。
+收敛：连续两轮 MF 相对降幅 <1%；孔径级用罚项变化 <1e-8。起步公式：`R = -(n_d-1)f′`、`EPD = EFFL/F#`，φ/P/C 见 §P7。
+
+## 4. 工作流（步骤序列在 `references/workflows.md`）
+
+| 场景 | 路线 | 模板 |
 |---|---|---|
-| 光阑片厚 | 0.05~0.1 mm | 金属蚀刻片，按零厚度面建模 |
-| 光阑↔镜片 边缘净空 | **0.25~0.4 mm** | 合格线，不是"偏紧" |
-| 光阑座安装净空 ≥2 mm | 仅大镜头 | 15 mm 级紧凑镜头给不出，别当验收线 |
-| 片间中心间隔 | **≥0.2~0.3 mm** | 隔圈壁厚 0.3~0.5，`MNCA` 默认 0.1 只是"不打架" |
-| 加工四项 | CT≥1.0、ET≥0.5、SD/CT≤3.5、min\|R\|≥3 | 比 \|B\|>5 更可信；**毫米级镜头按比例缩**（见 `wide-angle.md` §5） |
-| 收敛判据 | 连续两轮 MF 相对降幅 <1% | 孔径级用罚项变化 <1e-8 |
-| 失效起点底线 | 能追迹 + 焦距对 + 拓扑对 | 像质差不是问题 |
+| 没有面表 / 要极简骨架 | A 平面起步 | `workflows.md` W1 |
+| 有专利 / 教材结构 | B 四步法 | `workflows.md` W2 |
+| 目标相对孔径深 | 渐进孔径 | `workflows.md` W3 |
+| 放变量 | 批次状态机 | `staged-optimization.md` 第 3 节 |
 
-### 3.3 起步三判据 & 光焦度公式
-
-```
-平面起步：最后折射面 R = -(n_d - 1) × f′   （一次到位，无需迭代）
-口径换算：EPD = EFFL / F#；F/2 + f′=50 → EPD 25
-单片贡献：φ = (n-1)(1/R1 - 1/R2)；P = φ/n（Petzval）；C = φ/ν（色差）
-```
-
-## 4. 工作流模板
-
-### 4.1 路线 A：平面起步法（无现成面表）
-
-```
-1  get_system_info              核对范例玻璃/厚度/胶合面
-2  edit_surface ×7              非胶合折射面 → "Infinity"
-3  edit_surface                 最后折射面 R = -(nd-1)×f′
-4  get_first_order_data         验证 EFFL
-5  make_variable ×N             半径 + 离焦 + 空气间隔（严格串行，一次一个）
-6  clear_operands(confirm=True)
-7  add_operand(insert_at=1..K)  规格 + 护栏【置顶】
-8  set_default_merit_function(start_at=K+1)
-9  run_optimization(DLS) ×N     连续两轮 <1% 停
-10 run_optimization(OD)         换算法确认收敛
-11 make_variable(param="material") ×N → Hammer 分段跑（先补护栏，R4）
-12-17 一阶量 → 操作数/材料读回 → 几何体检 → 导出 2D/3D → save_file(正式路径)
-```
-
-### 4.2 路线 B：专利 / 教材四步法
-
-```
-【建结构】
-B1  get_project_context / get_system_info
-B2  insert_surface(position=2) ×N       原面全部后移
-B3  edit_surface(radius, thickness, material) 逐面填（平面传 "Infinity"）
-B4  edit_surface(is_stop=True)          自动取消原光阑
-B5  set_aperture / set_fields / set_wavelengths
-B6  get_first_order_data + get_image_quality   核对 EFFL/TOTR/BFL
-
-【步 1｜DLS：10 半径 + 4 正透镜厚 + 光阑前后空气，玻璃固定，3 视场】
-B7-B9   make_variable(radius ×10 / thickness ×4正 / thickness ×2空气)
-B10 clear_operands(confirm=True)
-B11 add_operand(insert_at=1..4)   EFFL / MNEG / MNCT / DIMX
-B12 add_operand(insert_at=5..)    护栏全集（R4）
-B13 set_default_merit_function(start_at=K+1, rings=2, arms=0)
-B14 get_merit_breakdown(top_n=10) 确认罚项前列不是恒定厚度偏置
-B15 run_optimization(DLS) ×2
-
-【步 2｜Hammer：换替代玻璃】
-B16 make_variable(param="material", 6 面)
-B17 get_system_info             必须读回 material_solve=22，不能只看返回 ok
-B18 ⚠️ 复查四类护栏齐备（R4），否则必出退化解
-B19 run_optimization(Hammer, duration_seconds=150) 分段，每段查 TOTR
-B20 get_system_info 逐面查厚度（几十上百 mm / 负值）+ check_manufacturability
-
-【修几何｜用 DLS，不用 Hammer】
-B21 check_interference(min_clearance=0.1, stop_clearance=2.0)  看 clearance_at
-B22 add_operand(MNEA(透镜面,光阑面) ≥ 净空, w=5) + MNCA 抬到 sag+净空
-B23 run_optimization(DLS) ×2
-B24 check_interference 复跑 → 出 _clearance_check.png 给用户核对
-
-【步 3｜加密视场 + 渐晕，DLS，不加新自由度】
-B25 set_fields(6 视场带 vcx/vcy)    核 readback；轴上视场保持 0/0
-B26 clear_operands → 重建
-B27 run_optimization(DLS) ×2
-B28 多视场同值 → 立刻怀疑工具（R13）
-
-【步 4｜工程约束 + 两阶段 Hammer】
-B29 加 MXCG(1,末玻璃面)≤合理值，删掉重复的同类上限
-B30 Hammer 阶段 1（3 环 6 臂）分段到单轮 <1%
-B31 set_default_merit_function(start_at=同一行, rings=5, arms=3)  覆盖不重建
-B32 Hammer 阶段 2 分段到单轮 <1%
-B33 save_file(filename=正式路径)   立即保存，Hammer 结果只在进程内存
-
-【验收】B34-B36 见 §5
-```
-
-**三条顺序铁律**：拓扑从不由优化器决定（改片数人工换结构）；玻璃一定放在形状之后（形状还差时换玻璃必得畸形补偿组合）；约束只能逐步加严，不能中途放松。
-
-### 4.3 渐进孔径子流程
-
-```
-C1 set_aperture(ImageSpaceFNumber, 起始值)   比目标宽 1~2 档
-C2 run_optimization(DLS) ×2~3               罚项变化 <1e-8 才算收敛
-C3 get_spot_diagram_data + get_fft_mtf_vs_field   留本级基线
-C4 save_file(阶段名) → save_file(工作名)     双保存，防下一级写脏存档
-C5 set_aperture(收紧一档) → 回 C2
-```
-
-**每级自检**：孔径收紧 ~11% 时 RMS 应涨 ~1.5 倍。涨超 2.5 倍 = 上级没收敛或跳解，回退半档；涨不到 1.1 倍 = 约束在替它扛，像质没吃到孔径。
-**汇报必须逐级列表**：孔径 / MF / 各视场 RMS / 最大 \|B\|，缺表算未执行。
-**自由度榨干判据**（≥2 条成立就上非球面/加片，别再磨球面）：多个元件 \|B\|>5；加片改善 <10%；子午/弧矢 MTF 分离 >2 倍。
-**非球面性价比**：末片后表面 > 首片 > 光阑附近；只上 A4/A6。
-
-### 4.4 变量分阶段放开（顺序比数量重要）
-
-```
-阶段 0 恢复结构：半径 + 厚度全放，只跑到"能追迹 + EFFL 对"
-阶段 1 定形状：固定全部厚度，只放半径        ← 形状（含 B 值）在此钉死
-阶段 2 调分配：放玻璃中心厚（负透镜优先）
-阶段 3 调间隔：放空气间隔（光阑前后优先）
-阶段 4 收尾：全放开跑一轮，只接受 MF 降幅 >1% 的改动
-```
-
-每阶段判据：放开后 MF 降幅 <1% → 固定回去，它们只给公差添乱。**形状在阶段 1 定型，事后收回变量救不回来。**
+**三条铁律**：拓扑从不由优化器决定（改片数人工换结构）；玻璃一定放在形状之后；约束只能逐步加严，不能中途放松。
+**执行前置**：任何 `make_variable` / `run_optimization` 先过 §1 M1–M3，贴阶段表。
 
 ## 5. 验收清单（每轮必跑，缺一不可）
 
@@ -263,32 +166,11 @@ C5 set_aperture(收紧一档) → 回 C2
 
 ## 6. 异常决策树
 
-| 症状 | 首查动作 | 然后读 |
-|---|---|---|
-| MF 降得很好但结构废了（厚度几十上百 mm / 负空气间隔） | `get_system_info` 看逐面厚度，`get_merit_breakdown` 找恒定偏置 | `cases-and-history.md` §C2.3（根因 = 护栏缺失，见 R4） |
-| 光阑插进透镜 / 两片边缘互穿 | `check_interference` 看 `clearance_at` | `design-principles.md` §P1 |
-| `check_interference` 报某对净空恒为 0 | 查该面是否 `is_stop` 且带材料 | `zosmcp-troubleshooting.md` §T11 |
-| 优化收敛漂亮但 `check_interference` 报相交 | 数 `MNCA` 条数是否 = 元件数+1 | `zosmcp-troubleshooting.md` §T12 |
-| 多个视场读数完全一样 | 查工具参数布局（`settings_report.applied` 是否为空） | `zosmcp-troubleshooting.md` §T4 |
-| 畸变压不下去 / 压出负畸变反而 MF 暴涨 | 读原生 FieldCurvatureAndDistortion，DIMX 只当幅值护栏 | `design-principles.md` §P8 |
-| MF 很低但边缘 MTF 差 | `get_aberrations` 看 FCUR/ASTI | `design-principles.md` §P2 |
-| 想加非球面救场曲 | 停。非球面不进 Petzval 和 | `design-principles.md` §P2 |
-| 元件 \|B\| 极大 / SD/CT 看着像砖 | 拆单片算 f 与相对孔径 | `design-principles.md` §P6 |
-| 要把 \|B\| 压回 5 以内（评价函数怎么做） | 用曲率链，禁用 `DIVB` | `design-principles.md` §P6.6 + `zosmcp-troubleshooting.md` §T17 |
-| 删/插面后新增的操作数在 MFE 里翻不到 | 是否用默认 append 追加到末尾（违 R10） | 重建成 `insert_at=1`，见 `zosmcp-troubleshooting.md` §T17 末 |
-| CRA 超标 | 场镜靠像面 + 温和 RAID（R12） | `cases-and-history.md` §C4.8 + `design-principles.md` §P11 |
-| 相对照度偏低 | `get_relative_illumination_data`（原生），**不要**用 `check_field_illumination` | `design-principles.md` §P9 |
-| 点列图艾里圈包住全部光点，但界面圈很小 | 圈是脚本算的，非 Zemax 原生 | `zosmcp-troubleshooting.md` §T14 |
-| 换采样后 MF 跳一个数量级 | 说明前面的解只在稀疏采样上好看，重跑 | `cases-and-history.md` §C2.2 + `zosmcp-troubleshooting.md` §T10 |
-| 改了参数但结果没变 | 看 `settings_report`/`readback`，静默丢弃 | `zosmcp-troubleshooting.md` §T5 |
-| Hammer 结果丢了 | 查 `_0000_HAMMER.zos` | `zosmcp-troubleshooting.md` §T2.5 |
+出症状先读 `references/cases-and-history.md` C5.1（症状 → 首查动作 → 对应 P/T/C 节），不要凭直觉改设计。
+两条总则：**数值可疑先怀疑工具，结构可疑先怀疑拓扑**；同一症状修两次不好，回 §1 加载对应 reference，停止试错。
 
-## 7. 存档与协作约定
+## 7. 存档与协作
 
-- `save_file()` **空参**会覆盖当前文档路径（可能写脏备份）→ 只用 `save_file(filename=正式路径)`。
-- `run_optimization` 自动落盘到**当前路径**，所以阶段存档靠「另存阶段名 → 再另存工作名」两次切回。
-- `clear_operands` / `run_optimization` / `edit_operand` / `remove_surface` 都会在 `<文件目录>/backups/` 生成备份；用户不要时完工后删除。
-- **部署方式：把 skill 目录放进所用 agent 认的 skills 路径即可**（`.github/skills/`、`.workbuddy/skills/`、`.claude/skills/`、`.dsh/skills/` 中任意一个），复制或克隆都行，无额外步骤。
-- **本机把上述路径做成了 Windows 目录 Junction 指向 `.github/skills/`**，这只是「一份文件给多个 agent 共用、避免多份副本各自漂移」的**本机便利做法，不是部署前提**。换机器/新克隆**不需要复刻 junction**，直接放文件即可；若确实想让多个 agent 共用一份，才用 `mklink /J <agent路径> <本仓库.github/skills>` 建，并用 `dir /AL` 确认。
-- git 只跟踪 `.github/skills/`（`.workbuddy/`、`.dsh/`、`.claude/` 均在 `.gitignore`）。多 agent 并发写入**无文件锁**，以最后写入为准 → 改完立刻 commit，把窗口压到最短。
-- **改完本 skill 必须跑结构自检**：`python scripts/lint_skill.py`（校验跨文件 § 引用、编号连续性、SKILL.md ≤300 行、路由表文件存在）。返回 0 才算改完。
+- 保存/备份行为（空参覆盖、自动落盘、`backups/`）→ `zosmcp-troubleshooting.md` §T16；只用 `save_file(filename=正式路径)`。
+- 部署路径、Junction、git 跟踪范围、多 agent 并发约定 → 仓库 `README.md`「技能部署」一节。
+- 改完本 skill 必须跑 `python scripts/lint_skill.py`（跨文件 § 引用、编号连续性、SKILL.md ≤300 行、路由表文件存在），返回 0 才算改完。

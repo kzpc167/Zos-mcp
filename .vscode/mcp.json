@@ -1,5 +1,18 @@
 {
   "servers": {
+    "matlab": {
+      "type": "stdio",
+      "command": "D:\\Zemax-mcp\\matlab-mcp\\matlab-mcp-server-windows-x64.exe",
+      "args": [
+        "--matlab-root=D:\\Program Files\\MATLAB\\R2025b",
+        "--log-folder=D:\\Zemax-mcp\\matlab-mcp\\logs",
+        "--matlab-session-mode=auto",
+        "--initialize-matlab-on-startup=true"
+      ],
+      "env": {
+        "PATH": "D:\\Program Files\\MATLAB\\R2025b\\bin;${env:PATH}"
+      }
+    },
     "zemax-opticstudio": {
       "type": "stdio",
       "command": "D:\\Zemax-mcp\\.venv\\Scripts\\python.exe",
@@ -10,6 +23,7 @@
         "--instance",
         "0"
       ]
+      
     }
   }
 }

@@ -107,6 +107,14 @@ scripts/             重启脚本、探针脚本、技能 lint
 zemax-ADAS/          设计案例与交付文档
 ```
 
+## MATLAB MCP 连接异常提示
+
+运行以下命令并保持 PowerShell 窗口打开。脚本监视启动后的新 MATLAB MCP 日志；发现连接超时或拒绝时，会将告警写入 `matlab-mcp/logs/watchdog-alerts.log`，并提示在 VS Code 的 **MCP: List Servers → MATLAB → Restart** 中重启。它只检测和提示，不会自行结束进程或重载 VS Code。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\watch_matlab_mcp.ps1
+```
+
 ## 技能（skills）
 
 技能只有**一份物理副本**：`.github/skills/`（入库）。另外两个路径是指向它的 Windows 目录软链，从任一路径读写都会立刻体现在其他路径，所以多 agent 共同编写时不会出现内容漂移。
@@ -127,18 +135,16 @@ zemax-ADAS/          设计案例与交付文档
 >
 > 重建后验证：`dir /AL` 应能看到两行 `<JUNCTION>`；再确认任一 agent 里各项目技能都能列出。
 
-当前 10 个项目技能：
+当前 9 个项目技能：
 
 | 技能                       | 覆盖范围                                                   |
 | -------------------------- | ---------------------------------------------------------- |
-| `zemax-ADAS-skill`       | 镜头设计主体方法论：路由表、铁律、参数表、工作流、验收清单 |
-| `zemax-optical-design`   | 通用光学设计与优化经验                                     |
-| `zemax-asphere-skill`    | 非球面全流程：k 受控优化、A4/A6 交替固定、反曲与斜率校核   |
+| `zemax-ADAS-skill`       | 镜头设计主体方法论：加载规则、红线、参数速查、工作流、验收 |
 | `zemax-athermal-skill`   | 无热化：热离焦原理、三条路线、MCE 步骤                     |
 | `zemax-tolerance-skill`  | 公差分析：Q1–Q8 加工等级、蒙特卡洛良率、置信区间判读      |
 | `zemax-ghost-skill`      | 鬼影与杂散光：三要素、深度追迹、镀膜阈值                   |
+| `zemax-matlab-skill`     | MATLAB 辅助：数据后处理、拟合统计、出版级出图              |
 | `zemax-zoom-lens-design` | 变焦镜头设计                                               |
-| `system-setup-by-type`   | 按系统类型确定孔径/视场/波长设置                           |
 | `lab-book-skill`         | 实验记录整理                                               |
 | `neat-freak`             | 文件与目录整洁                                             |
 
@@ -149,3 +155,4 @@ zemax-ADAS/          设计案例与交付文档
 - Windows（ZOS-API 依赖 COM）
 - Ansys Zemax OpticStudio 2024 R1（含 ZOS-API 许可），运行中并已激活 Interactive Extension
 - Python 3.13
+- Matlab
