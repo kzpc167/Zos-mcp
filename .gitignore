@@ -35,6 +35,8 @@ Backup/
 # 独立仓库（clone 进来的外部项目，单独维护）
 .github/skills/lab-book-skill/
 .github/skills/neat-freak/
+# MathWorks 官方 matlab-mcp-server 克隆（自带 .git）；二进制按 README 从 releases 下载
+matlab-mcp/
 
 # skill 重构临时备份（旧编号体系，勿入库）
 *.bak-*
