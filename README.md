@@ -115,6 +115,15 @@ zemax-ADAS/          设计案例与交付文档
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\watch_matlab_mcp.ps1
 ```
 
+**自动修复**：上面那个脚本只提示不动手。要一步把挂死的会话清掉并重建共享引擎：
+
+```powershell
+.venv\Scripts\python.exe scripts\restart_matlab_mcp.py --dry-run   # 先看计划，不动任何东西
+.venv\Scripts\python.exe scripts\restart_matlab_mcp.py             # 确认后执行
+```
+
+它做四件事：结束 `matlab-mcp-server` 进程 → 结束挂死的 MATLAB → 把 0 字节的 `toolbox_cache-*.xml` 改名备份 → 用 `matlab.engine.shareEngine` 重起一个共享引擎，让 `--matlab-session-mode=auto` 走 attach。跑完后仍需在客户端重连一次（Claude Code：`/mcp`；VS Code：MCP: Restart Server），这一步脚本代替不了。客户端显示 connected 只代表 stdio 握手成功，不代表 MATLAB 已挂上；判据是能跑通一次 `detect_matlab_toolboxes`。
+
 ## 技能（skills）
 
 技能只有**一份物理副本**：`.github/skills/`（入库）。另外两个路径是指向它的 Windows 目录软链，从任一路径读写都会立刻体现在其他路径，所以多 agent 共同编写时不会出现内容漂移。
@@ -156,3 +165,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\watch_matlab_mcp.p
 - Ansys Zemax OpticStudio 2024 R1（含 ZOS-API 许可），运行中并已激活 Interactive Extension
 - Python 3.13
 - Matlab
+- Matlab-MCP

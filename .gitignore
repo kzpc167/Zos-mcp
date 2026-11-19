@@ -32,6 +32,10 @@ Thumbs.db
 *_backup*.zmx
 Backup/
 
+# ---- 临时工作区（证据文件按需单独 git add -f）----
+tmp/*
+!tmp/README.md
+zemax-ADAS/backups
 # 独立仓库（clone 进来的外部项目，单独维护）
 .github/skills/lab-book-skill/
 .github/skills/neat-freak/

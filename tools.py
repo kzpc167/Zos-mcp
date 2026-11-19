@@ -2524,8 +2524,9 @@ class ZemaxToolkit:
                 mrh.PupilZone = float(pupil_zone)
                 detail = {"height": float(height), "pupil_zone": float(pupil_zone)}
             except Exception as e:
+                mrh = solve
                 detail = {"warning": f"参数设置失败: {e}"}
-            cell.SetSolveData(solve)
+            cell.SetSolveData(mrh)
             readback = None
             try:
                 readback = cell.GetSolveData().Type
@@ -2545,7 +2546,23 @@ class ZemaxToolkit:
             cell.MakeSolveFixed()
             return json.dumps({"ok": True, "surface": surface_number, "solve": "fixed"}, ensure_ascii=False)
         if st == "variable":
-            cell.MakeSolveVariable()
+            solve = cell.CreateSolveType(2)  # SolveType_Variable
+            if solve is None:
+                return json.dumps({"error": "CreateSolveType(2) 返回 None"}, ensure_ascii=False)
+            try:
+                solve_data = solve._S_Variable
+            except Exception:
+                solve_data = solve
+            cell.SetSolveData(solve_data)
+            try:
+                readback = cell.GetSolveData().Type
+            except Exception:
+                readback = None
+            if readback is not None and int(readback) != 2:
+                return json.dumps(
+                    {"error": f"设置变量失败，读回 solve={readback}"},
+                    ensure_ascii=False,
+                )
             return json.dumps({"ok": True, "surface": surface_number, "solve": "variable"}, ensure_ascii=False)
         return json.dumps({"error": f"不支持的 solve 类型: {solve_type}"}, ensure_ascii=False)
 
@@ -2602,7 +2619,29 @@ class ZemaxToolkit:
                 status = "固定(玻璃)"
         else:
             if variable:
-                cell.MakeSolveVariable()
+                # 某些 ZOS-API 版本里 MakeSolveVariable() 返回成功但不生效
+                # （读回仍是 Fixed，优化器认为零变量）。官方推荐写法是
+                # CreateSolveType(Variable) + SetSolveData(专用子接口)。
+                solve = cell.CreateSolveType(2)  # SolveType_Variable
+                if solve is None:
+                    return json.dumps(
+                        {"error": f"面 {surface_number} 创建 Variable solve 失败"},
+                        ensure_ascii=False,
+                    )
+                try:
+                    solve_data = solve._S_Variable
+                except Exception:
+                    solve_data = solve
+                cell.SetSolveData(solve_data)
+                try:
+                    readback = cell.GetSolveData().Type
+                except Exception:
+                    readback = None
+                if readback is not None and int(readback) != 2:
+                    return json.dumps(
+                        {"error": f"面 {surface_number} 的 {param_name} 设置变量失败，读回 solve={readback}"},
+                        ensure_ascii=False,
+                    )
                 status = "变量"
             else:
                 cell.MakeSolveFixed()
@@ -5104,6 +5143,52 @@ class ZemaxToolkit:
             "fields": traced_fields,
         }
 
+    @staticmethod
+    def _surface_sag(surf: dict, h: float):
+        """面矢高，含圆锥系数与偶次非球面项。
+
+        z(h) = c·h²/(1+√(1−(1+k)c²h²)) + Σ A_{2i}·h^{2i}
+
+        只用球面公式会严重高估非球面的边缘矢高：本项目 S13（R=−6, k=−1, A4=5.16e-4）
+        球面矢高 −2.683 mm、真实矢高 −1.749 mm，差 0.93 mm —— 足以让净空判定和
+        剖面图与真实面形对不上（2026-11-18 实测）。
+
+        返回 None 表示超半球（根号下为负，解析式失效）。
+        """
+        import math
+        R = surf.get("radius")
+        c = 0.0 if (R is None or abs(R) > 1e15) else 1.0 / R
+        if not h or h <= 0:
+            return 0.0
+        k = surf.get("conic") or 0.0
+        rad = 1.0 - (1.0 + k) * c * c * h * h
+        if rad < 0:
+            return None
+        z = (c * h * h) / (1.0 + math.sqrt(rad)) if c else 0.0
+        for order, a in (surf.get("asph") or {}).items():
+            z += a * (h ** order)
+        return z
+
+    def _surface_extra_terms(self, idx: int, surf_obj) -> tuple:
+        """读圆锥系数与偶次非球面系数；非偶次非球面返回 ({}, 空)。"""
+        conic = _safe(surf_obj, "Conic", 0.0) or 0.0
+        asph = {}
+        try:
+            if int(_safe(surf_obj, "type", -1)) == int(
+                self.conn.constants.SurfaceType_EvenAspheric
+            ):
+                ea = self._get_even_aspheric_surface(idx)
+                for order in (4, 6, 8, 10, 12, 14):
+                    try:
+                        v = float(ea.GetNthEvenOrderTerm(order))
+                    except Exception:
+                        continue
+                    if v:
+                        asph[order] = v
+        except Exception:
+            pass
+        return conic, asph
+
     def check_manufacturability(self) -> str:
         """对当前系统每个透镜进行可制造性检查：边缘厚度、CT/ET比值、弯曲因子、最小曲率半径等。"""
         import math
@@ -5120,6 +5205,7 @@ class ZemaxToolkit:
             mat = _safe(s, "Material", "") or ""
             comment = _safe(s, "Comment", "") or ""
             sd = _safe(s, "SemiDiameter", 0.0) or 0.0
+            conic, asph = self._surface_extra_terms(i, s)
             surfaces.append({
                 "surf": i,
                 "radius": r if r is not None else 1e18,
@@ -5127,6 +5213,8 @@ class ZemaxToolkit:
                 "material": mat.strip(),
                 "comment": str(comment).strip(),
                 "semi_diameter": abs(sd),
+                "conic": conic,
+                "asph": asph,
             })
 
         # 识别透镜元件：连续材料非空表面组
@@ -5169,17 +5257,15 @@ class ZemaxToolkit:
             # 中心厚度 = 组内所有材料面的厚度之和
             ct = sum(surfaces[k]["thickness"] for k in group[:-1])
 
-            # sag 计算：sag = R - sqrt(R² - h²)，h = semi_diameter
-            def sag(R, h):
-                if abs(R) > 1e15:  # 平面
-                    return 0.0
-                R2_minus_h2 = R ** 2 - h ** 2
-                if R2_minus_h2 < 0:
-                    return abs(R)  # 超出边缘（非物理），保守估计
-                return R - math.copysign(math.sqrt(R2_minus_h2), R)
+            # sag 计算：含圆锥系数与非球面项（球面近似会把非球面边缘厚算错）
+            def sag(surf_entry, h):
+                z = self._surface_sag(surf_entry, h)
+                if z is None:  # 超出边缘（非物理），保守估计
+                    return abs(surf_entry["radius"])
+                return z
 
-            sag1 = sag(R1, sd)
-            sag2 = sag(R2, sd)
+            sag1 = sag(entry, sd)
+            sag2 = sag(exit_, sd)
             # ET = CT - sag(入射面) + sag(出射面)
             # 注意符号：Zemax 定义下入射面正 sag 使边缘变薄，出射面正 sag 使边缘变厚
             et = ct - sag1 + sag2
@@ -5313,6 +5399,7 @@ class ZemaxToolkit:
             t = _safe(s, "Thickness", 0.0)
             mat = (_safe(s, "Material", "") or "").strip()
             sd = abs(_safe(s, "SemiDiameter", 0.0) or 0.0)
+            conic, asph = self._surface_extra_terms(i, s)
             surfaces.append({
                 "surf": i,
                 "radius": r if r is not None else 1e18,
@@ -5320,6 +5407,8 @@ class ZemaxToolkit:
                 "material": mat,
                 "semi_diameter": sd,
                 "is_stop": bool(_safe(s, "IsStop", False)),
+                "conic": conic,
+                "asph": asph,
             })
 
         # 顶点 z 坐标（面 1 为 0）
@@ -5327,16 +5416,9 @@ class ZemaxToolkit:
         for i in range(1, last_surf):
             zv[i + 1] = zv[i] + surfaces[i]["thickness"]
 
-        def _sag(R, h):
-            """矢高；返回 None 表示超半球无解。平面返回 0。"""
-            if R is None or abs(R) > 1e15:
-                return 0.0
-            if not h or h <= 0:
-                return 0.0
-            t = R * R - h * h
-            if t < 0:
-                return None
-            return R - math.copysign(math.sqrt(t), R)
+        def _sag(surf_entry, h):
+            """矢高（含圆锥系数/非球面项）；返回 None 表示超半球无解。"""
+            return self._surface_sag(surf_entry, h)
 
         notes = []
 
@@ -5385,19 +5467,20 @@ class ZemaxToolkit:
             sd_a, sd_b = sa["semi_diameter"], sb["semi_diameter"]
 
             hc = min(sd_a, sd_b)          # 同高度比较（面-面标准口径）
-            sag_a_c, sag_b_c = _sag(sa["radius"], hc), _sag(sb["radius"], hc)
+            sag_a_c, sag_b_c = _sag(sa, hc), _sag(sb, hc)
             # 各自口径比较（对光阑/机械件更保守）
-            sag_a_o, sag_b_o = _sag(sa["radius"], sd_a), _sag(sb["radius"], sd_b)
+            sag_a_o, sag_b_o = _sag(sa, sd_a), _sag(sb, sd_b)
 
             invalid = []
             if sag_a_c is None or sag_b_c is None or sag_a_o is None or sag_b_o is None:
-                for nm, r_, h_ in ((a["name"], sa["radius"], sd_a), (b["name"], sb["radius"], sd_b)):
-                    if _sag(r_, h_) is None:
-                        invalid.append(f"{nm} 半口径 {h_:.3f} > |R| {abs(r_):.3f}（超半球，sag 无解）")
+                for nm, s_, h_ in ((a["name"], sa, sd_a), (b["name"], sb, sd_b)):
+                    if _sag(s_, h_) is None:
+                        invalid.append(f"{nm} 半口径 {h_:.3f} 超出曲面解析范围（超半球，sag 无解）")
 
             gap_common = None if (sag_a_c is None or sag_b_c is None) else (z_b + sag_b_c) - (z_a + sag_a_c)
             gap_own = None if (sag_a_o is None or sag_b_o is None) else (z_b + sag_b_o) - (z_a + sag_a_o)
-            # 真实最小实体间隔：球面 sag 对 r 单调，极值只可能在 r=0 或 r=hc，故取三者最小
+            # 真实最小实体间隔：sag 在通光区内单调，极值只可能在 r=0 或 r=hc，故取三者最小
+            # （非球面项 A4/A6 会让 sag 偏离球面，故上面用 _surface_sag 而非球面公式）
             center_gap = (z_b + 0.0) - (z_a + 0.0)
             cands = {}
             cands["axis"] = center_gap
@@ -7842,9 +7925,12 @@ class ZemaxToolkit:
         for s in range(1, n_last + 1):
             if abs(surf_thick.get(s, 0.0)) < 1e-9:
                 continue
-            # 胶合组（前后任一相邻面也是玻璃）的中心厚单独收紧：
-            # 双胶合两片是本系统最敏感项，产线上通常收到 ±0.015~0.02。
-            cemented = bool(mat_of.get(s - 1, "")) or bool(mat_of.get(s + 1, ""))
+            # 胶合组中心厚单独收紧：双胶合两片是本系统最敏感项，产线上通常收到 ±0.015~0.02。
+            # 判定必须「本面是玻璃」且「相邻面也是玻璃」——mat_of[s] 表示 s→s+1 之间的介质。
+            # 旧条件写成 mat_of[s-1] or mat_of[s+1]，会把「紧邻镜片前方的那段空气间隔」
+            # 也判成胶合组，误收紧 S2/S4/S5/S8/S10/S12（2026-11-19 实测，S10 恰是最敏感项）。
+            cemented = bool(mat_of.get(s, "")) and (
+                bool(mat_of.get(s - 1, "")) or bool(mat_of.get(s + 1, "")))
             if cemented and cem_th > 0:
                 th_s, tag = cem_th, "(胶合组 ±%.3f)" % cem_th
             elif cemented and self._tol_tighten_cemented_ct:
@@ -8093,19 +8179,29 @@ class ZemaxToolkit:
             diag["number_of_runs"] = _jsonable_number(_safe(tol, "NumberOfRuns", None))
 
             import os
-            import tempfile
-            fp = os.path.join(tempfile.gettempdir(), "zos_tolerance_report.txt")
-            try:
-                if os.path.isfile(fp):
-                    os.remove(fp)
-            except Exception:
-                pass
-
-            # ITolerancing 没有 GetTextFile；报告靠 OutputFile 预先指定路径。
+            # 报告靠 ITolerancing.OutputFile 落盘（ITolerancing 没有 GetTextFile）。
+            # 实测（2024 R1，231205）：OutputFile 只接受「纯文件名 + 大写 .TXT」，
+            # Zemax 会写到「当前系统文件所在目录」；给绝对路径或小写 .txt 会被静默忽略，
+            # 这就是此前 report_path 恒为 null 的原因（2026-11-19 验证）。
             # 必须在 Run 之前设置，否则不会落盘。
             try:
-                tol.OutputFile = fp
+                sys_file = str(_safe(system, "SystemFile", "") or "")
+            except Exception:
+                sys_file = ""
+            sys_dir = os.path.dirname(sys_file) if sys_file else os.getcwd()
+            fp_name = "ZOS_TOL_REPORT.TXT"
+            fp = os.path.join(sys_dir, fp_name)
+            for stale in (fp, os.path.join(sys_dir, "ZOS_TOL_REPORT.txt")):
+                try:
+                    if os.path.isfile(stale):
+                        os.remove(stale)
+                except Exception:
+                    pass
+
+            try:
+                tol.OutputFile = fp_name
                 diag["output_file_set"] = _safe(tol, "OutputFile", None)
+                diag["output_file_dir"] = sys_dir
             except Exception as e:
                 diag["output_file_error"] = str(e)
 
@@ -8213,6 +8309,15 @@ class ZemaxToolkit:
                     got = cand
                     break
             diag["textfile_via"] = got
+            if not os.path.isfile(fp):
+                # OutputFile 由 Zemax 自己写盘，大小写可能被改写；大小写不敏感地兜底找一次
+                try:
+                    for f in os.listdir(sys_dir):
+                        if f.upper() == fp_name:
+                            fp = os.path.join(sys_dir, f)
+                            break
+                except Exception:
+                    pass
             txt = ""
             if os.path.isfile(fp):
                 txt = _read_text_any(fp)
@@ -8407,13 +8512,9 @@ class ZemaxToolkit:
         def Y(r):
             return axis_y + r * sy
 
-        def sag(R, h):
-            if R is None or abs(R) > 1e15:
-                return 0.0
-            t = R * R - h * h
-            if t < 0:
-                return None
-            return R - math.copysign(math.sqrt(t), R)
+        def sag(surf_entry, h):
+            """与数值判定用同一个矢高函数，保证图与数是同一套几何。"""
+            return self._surface_sag(surf_entry, h)
 
         img = Image.new("RGB", (W, H), (255, 255, 255))
         dr = ImageDraw.Draw(img)
@@ -8445,7 +8546,7 @@ class ZemaxToolkit:
                 pts, ok = [], True
                 for k in range(n + 1):
                     h = s["semi_diameter"] * k / n
-                    sg = sag(s["radius"], h)
+                    sg = sag(s, h)
                     if sg is None:
                         ok = False
                         break

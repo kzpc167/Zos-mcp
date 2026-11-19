@@ -1,6 +1,6 @@
 ---
 name: zemax-ADAS-skill
-description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角物镜主线）。用 zosmcp MCP 工具做 Zemax 镜头设计：两条起步路线（平面起步法 / 专利·教材起步法）、教材四步法分阶段优化、评价函数与护栏配置、孔径渐进、光阑净空、畸变与 CRA 控制、非球面、窗口等效平板、验收与异常排查。Use when: 设计 ADAS 或相机镜头、双高斯物镜、广角物镜、按教材/专利数据建模、分阶段优化、评价函数优化、EFFL 保焦距、替代玻璃替换、Hammer 全局优化、渐晕拦光、负畸变控制、CRA 远心化、优化后出现玻璃砖/负空气间隔/光阑与透镜重叠/多视场读数完全相同等异常排查。优化变量必须按 references/staged-optimization.md 分阶段放开，禁止一次全放；references 按动作强制加载。'
+description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角物镜主线）。用 zosmcp MCP 工具做 Zemax 镜头设计：两条起步路线（平面起步法 / 专利·教材起步法）、教材四步法分阶段优化、评价函数与护栏配置、孔径渐进、光阑净空、畸变与 CRA 控制、非球面、窗口等效平板、验收与异常排查。Use when: 设计 ADAS 或相机镜头、双高斯物镜、广角物镜、按教材/专利数据建模、分阶段优化、评价函数优化、EFFL 保焦距、替代玻璃替换、Hammer 全局优化、渐晕拦光、负畸变控制、CRA 远心化、极端弯月替换（机械定心系数 Z）、单组态化、交付四图（3D 布局/净空/点列图/MTF）、写工程总结（光学/无热化/公差/鬼影/DFM 五件套）、优化后出现玻璃砖/负空气间隔/光阑与透镜重叠/多视场读数完全相同等异常排查。优化变量必须按 references/staged-optimization.md 分阶段放开，禁止一次全放；references 按动作强制加载。'
 ---
 
 # ADAS 镜头设计执行规程
@@ -27,7 +27,9 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | 没有面表，要挑专利起点 | `references/patent-library.md` | 凭记忆写专利面表 |
 | 工具报错 / 读数同值 / 参数没生效 / 枚举 / API | `references/zosmcp-troubleshooting.md`（对应 T 节） | 原样重试同一失败调用 |
 | 净空判据 / Petzval / 等效光程 / 艾里斑 / 工程阈值 / 渐晕 P10 / **\|B\| 评价函数链** | `references/design-principles.md`（对应 P 节） | 凭感觉定净空、上限、权重、渐晕 |
+| **弯月替换 / 定心系数 Z / 极端弯月判定 / 单组态化（删温度组态）** | `references/meniscus-centering.md` | 拿 B 当 Z 用、指望 MFE 链把 Z 拉到位、删组态不验证 |
 | 判"结果好坏" / 历史对比 / 事故复盘 / 异常现场排障 | `references/cases-and-history.md`（先查 C5） | 凭直觉改设计、连续试错、不查 C5 |
+| 可制造性/DFM 评审、出图、询价、降本、供应商能力 | 独立 skill `spherical-lens-dfm-review` | 把 `check_manufacturability` 的 pass 当"可投产" |
 | 非球面 k / A4·A6 / 反曲 / 面型验收 | 独立 skill `zemax-asphere-skill` | — |
 | 鬼影 / 杂散光 / GISET·PST / 镀膜 | 独立 skill `zemax-ghost-skill` | — |
 | 报告级出图 / 统计（良率·CPK·CI）/ 拟合（热离焦）/ 面型导数与反曲 | 独立 skill `zemax-matlab-skill`（**必须实际调用 MATLAB**） | 用 Python / 手算冒充 MATLAB 交付结果 |
@@ -89,7 +91,7 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 
 **R24 非球面一次只放 A4/A6。** 先 `Fixed_5` 核对原生 MTF，再加下一面；A8/A10 很容易把 SPHA 拉到 −30λ。
 
-**R25 `MNEA(i,i)` 可能返回 target。** 它不反映真实边缘净空；用 `MNCA` 下限约束 + `check_interference` 复核。
+**R25 `MNEA` 必须写相邻面一对 `MNEA(i,i+1)`；写成 `MNEA(i,i)` 是空操作。** Surf1=Surf2 时 Zemax 恒返回 target，读回值永远"达标"，边缘净空实际从未被约束。实测：`MNEA(8,8)` 读回 0.35（=target，真值 0.126），改 `MNEA(8,9)` 后读回 0.12618，与 `check_interference` 逐位一致。**注意 `MNCA(i,i)` 反而是有效的**（指"面 i 之后的间隔"，`MNCA(14,14)` 读回真实 BFL 可证），只有 MNEA 有 i==i 退化。改完必须拉 `check_interference` 复核。
 
 **R26 优化 k 时 A4/A6+ 必须显式固定。** "没改它" ≠ "不是变量"；先 `make_variable(param="A4"/"A6", variable=false)`。A4 只在 k 收敛且落在边界内之后才允许释放，且不得在 k 优化阶段同时放 A4 及以上。
 
@@ -106,8 +108,13 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 **R32 打开当前已激活路径的备份可能不重新加载，且可能把内存状态写回该文件。** 恢复快照前先把备份复制成**新文件名**，再 `open_file` 副本；不要直接打开原备份路径。
 
 **R33 极端弯月用「曲率链」约束，别只盯着看。** Zemax 无弯曲因子操作数，`check_manufacturability` 的 `bend_factor_B` 只是读数。`B > −5` 化成 **`c2 > 1.5c1`**（线性）；`\|B\| < 5` 化成 **`5\|c2−c1\| − \|c1+c2\| > 0`**（配 `ABSO`，正负弯月与 R 变号全域有效）。**禁用 `DIVB`**（Param2 写不进，值恒 0）。卡在 −5.01 贴线时把 target 抬 3e−4 给裕量，一次即过；达标后 target 改回真实阈值。链见 `design-principles.md` §P6.6，坑见 `zosmcp-troubleshooting.md` §T17。
+**但 \|B\| 判据只对弯月片（两半径同号）生效**，双凸/双凹不判；且该曲率链若写成 `CONS/ABSO/DIFF` 复合形式，末端 `OPGT`（权重 10000）**罚得动、推不动**——能判出超限并主导 MF，但复合链无 DLS 梯度，优化器挪不动它（R29）——可靠做法是 `edit_surface` 手改半径 + `set_solve(fixed)`，再用 `check_manufacturability` 的逐片 `bend_factor_B` 复核。同理 **Z（定心系数）在 MFE 里也没有梯度**：`Z = D/(4(n−1)\|f\|)` 与弯曲无关，只能锁半径。做法见 `staged-optimization.md` 的「带硬几何指标（定心系数 Z）的分阶段放开」一节。
 
 **R34 优化必须先过 §1 的 M1–M3 前置门。** 未加载 `staged-optimization.md`、未在回复里贴阶段表就 `make_variable` / `run_optimization` = 违规；**严禁一次放开全部半径 + 厚度 + 玻璃**（"先全放再收"是禁止路线，必出退化解）。
+
+**R35 极端弯月必须用定心系数 Z 判，不能用 \|B\| 代替。** `B` 只反映形状，`Z = ¼\|D₁/R₁ ± D₂/R₂\|` 才反映可定心性（由口径与光焦度决定，形状改不动）。Z<0.05 不可交付；0.05~0.15 常规；>0.15 易加工但本类拓扑往往做不到——此时要如实说明"需改拓扑"，不要反复重跑优化。**Z 不能靠 MFE 复合链追**（DLS 无梯度），必须把半径固定到目标 Z 对应的值。详见 `references/meniscus-centering.md`。
+
+**R36 权重按"评价函数总量级"配，不按直觉配。** 默认 `OPDM` 4 环 × 8 臂 = 204 行、每行权重 10，合计约 2000，是评价函数的主体；**任何权重 <20 的约束在其中基本等于不存在**。实测：`MTFT` 15° 视场权重只有 2 时，优化器直接把它从 0.57 换到 0.23 去满足 EFFL/DIMX；提到 20 才守得住。硬指标（TOTR / EFFL / 边缘净空）权重应上到 **100~2000** 量级。反过来，TOTR 权重设到 2000 后优化只剩半径可动，交付前按需要回调。
 
 ## 3. 核心参数表（照抄，不要凭记忆）
 
@@ -150,19 +157,52 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 | 1 | 一阶量 | `get_first_order_data` | EFFL 达标、TOTR 无暴涨 |
 | 2 | 逐面厚度/半口径 | `get_system_info` | 玻璃砖、**负空气间隔**、是否顶到上限 |
 | 3 | 可加工性 | `check_manufacturability` | ET、SD/CT、\|B\|（平板假阳性按 R17 忽略） |
-| 4 | **实体净空** | `check_interference` | 光阑/镜片穿透、元件互插、最紧在轴上还是边缘 |
+| 4 | **实体净空** | `check_interference` | 光阑/镜片穿透、元件互插、最紧在轴上还是边缘。**非球面的 sag 必须含 k 与 A4/A6**：只用 `R−√(R²−h²)` 的球面近似会高估矢高（本项目 S13 差 0.93 mm，把 1.07 mm 的净空误报成 0.13，图上还会画成相插）。2026-11-18 已修工具，在此之前的历史数字要重跑 |
 | 5 | 像质 | `get_image_quality` + 点列图 | RMS/GEO；同值即工具坏 |
 | 6 | 畸变 | `get_distortion` + `get_field_curvature_distortion_data` 交叉 | 逐视场单调性、是否 <阈值 |
 | 7 | **看 3D 布局图（隐藏透镜边）** | `export_layout_image(3D, hide_lens_edges=true)` + 看图 | 真实面形/边缘/元件是否臃肿、弯月过深、面形鼓包、边缘相交、玻璃砖、光阑与透镜重叠、间隔顶穿（**3D 一张看全部，2D 已废弃**） |
 | 8 | 罚项构成 | `get_merit_breakdown(top_n=10)` | 恒定厚度偏置（锁死厚度造成） |
+| **9** | **交付四图** | 见下方「交付四图」 | 缺一张即未完成交付；图必须来自最终定稿状态 |
 
 **第 0 项为什么排第一**：矩形 sensor 的对角视场 ≠ 子午边缘视场，必须显式加 `(H_half, V_half)` 那个点；只看子午视场会得出"全绿"的错误结论。波长同理，只给 F/d/C 的"可见光 ✅"是三条谱线。
 
-**出图规范**：`export_layout_image` **只导 3D 一张**（用户 2026-11-03 明确要求：取消二维布局图）——
-- **3D**：`layout_type="3D"`、`view="current"`、`angle_x=0`、`angle_y=0`、`angle_z=0`、`hide_lens_edges=true` → `layouts/layout_3D.png`。**隐藏透镜边后才能看清真实面形与边缘，是自查“透镜是否合理”的必看项**（弯月过深、面形鼓包、边缘相交、玻璃砖）。
-- ~~2D：`layout_type="2D"` → `layouts/layout_2D.png`~~ —— **不再导出、不再打开、`present_files` 里也不放**。光阑/透镜重叠与空气间隔一律用 `check_interference` 的数值判定，不靠 2D 图目视。
+**交付四图（每次设计完成必出，缺一即未完成）**——用户 2026-11-18 明确要求：
+每轮验收收尾必须导出并在回复里呈现这四张图，全部落在 `zemax-ADAS/layouts/`，固定文件名、覆盖式、不带日期后缀。
 
-点列图 `export_spot_diagram_image(show_airy=True)` → `layouts/spot_diagram.png`。固定文件名、覆盖式，不带日期后缀。导出失败必须明确报告，不得拿另一种视图冒充。
+| # | 图 | 命令 | 文件名 |
+|---|---|---|---|
+| 1 | **3D 布局** | `export_layout_image(layout_type="3D", view="current", angle_x/y/z=0, hide_lens_edges=true)` | `layout_3D.png` |
+| 2 | **净空剖面** | `check_interference(save_image=true, image_path=…/layouts/_clearance_check.png)` | `_clearance_check.png` |
+| 3 | **点列图** | `export_spot_diagram_image(show_airy=true, wave=0)` | `spot_diagram.png` |
+| 4 | **MTF 曲线** | `get_mtf_curve(max_frequency=240, num_points=10)` 取数 → MATLAB 出图（见下） | `MTF.png` |
+
+**四图规则**：
+- **一种设计只留一个**：四个文件名固定（`layout_3D.png` / `_clearance_check.png` / `spot_diagram.png` / `MTF.png`），每次覆盖。**禁止加日期/版本/结构后缀**（如 `layout_3D_定心版.png`），否则目录里会堆出一堆看着像"没更新"的旧图，也分不清哪张对应定稿。换设计就换目录（或换项目子目录），不换文件名。
+- 四张图必须来自**最终定稿的同一状态**。最后一轮 DLS 之后、`save_file` 之后重出，不能拿中间过程的图凑数。
+- 图导出后**必须真的打开看**（`Read` 图片），用眼睛确认面形/穿模/曲线形状；不能只凭工具返回 `ok:true` 就宣布交付。
+- 3D 只导一张，**2D 布局已废弃**：不导出、不打开、不放回复里。光阑/透镜重叠与空气间隔一律用 `check_interference` 数值判定。
+- 隐藏透镜边（`hide_lens_edges=true`）才能看清真实面形与边缘，是自查"透镜是否合理"的必看项（弯月过深、面形鼓包、边缘相交、玻璃砖）。
+- 导出失败必须明确报告，**不得拿另一种视图冒充**（点列图不能顶替 MTF，2D 不能顶替 3D）。
+- 报告"图已更新"前先核 `md5sum` / `date -r`：同名覆盖后哈希或时间戳必须变。**同名文件哈希相同 = 内容确实没变**，此时别跟用户争"我更新了"——先查是不是另一个目录（`tmp/layouts/` 之类的默认落盘处）里还留着一份旧副本。
+
+**MTF 图为什么不能直接用 `export_analysis_data("fft_mtf")` 的图**：ZOS-API 的分析类没有可靠的位图导出，
+MCP 的 `rendered_fallback` 会把 y 轴压成 0.33~1.05、丢掉视场标注，**不能作为凭证图**（2026-11-18 实测）。
+正确路径：
+
+```
+① get_mtf_curve(max_frequency=240, num_points=10, wave=0)  → 逐视场 T/S + 衍射极限数据
+② 落 CSV：matlab/data/mtf_curve_<项目>.csv（首列 freq_lpmm，其余 f1T,f1S,…,dl；f=0 时全为 1）
+③ MATLAB 出图：matlab/mtf_plot_<项目>.m，实线=T、虚线=S、灰点划=衍射极限、竖虚线标 120 lp/mm
+④ exportgraphics(fig, '…/layouts/MTF.png', 'Resolution', 300)
+```
+
+MATLAB MCP（`mcp__matlab__*`）worker 起不来时（`timeout waiting for worker to start`），
+用本机 `matlab -batch "run('…/mtf_plot_<项目>.m')"` 跑同一脚本 —— 这仍是真 MATLAB 渲染；
+**禁止**改用 Python/matplotlib 冒充（见 `zemax-matlab-skill` 的「什么时候必须切到 MATLAB」强制触发条款）。交叉校验：脚本里用 `interp1`
+算出的 MTF@120 应与 `get_mtf(frequency=120)` 的原生读数一致（本例 0.582 vs 0.581）。
+
+点列图 `export_spot_diagram_image` 的 RMS 用的是**全波混合 + 不同采样**，与 `get_image_quality`
+的逐视场 RMS（主波长口径）不完全等值，报告里以 `get_image_quality` 为准、点列图看形状。
 
 ## 6. 异常决策树
 
@@ -173,4 +213,22 @@ description: 'ADAS / 相机镜头光学设计执行规程（双高斯 + 广角�
 
 - 保存/备份行为（空参覆盖、自动落盘、`backups/`）→ `zosmcp-troubleshooting.md` §T16；只用 `save_file(filename=正式路径)`。
 - 部署路径、Junction、git 跟踪范围、多 agent 并发约定 → 仓库 `README.md`「技能部署」一节。
-- 改完本 skill 必须跑 `python scripts/lint_skill.py`（跨文件 § 引用、编号连续性、SKILL.md ≤300 行、路由表文件存在），返回 0 才算改完。
+- 改完本 skill 必须跑 `python scripts/lint_skill.py`（跨文件 § 引用、编号连续性、SKILL.md ≤300 行、references 行数预算、路由表文件存在），返回 0 才算改完。
+
+**references 维护规则（防臃肿 / 防过拟合）**
+
+三种角色不许混用：
+
+| 文件类型 | 写什么 | 增长方式 |
+|---|---|---|
+| 本文件 `SKILL.md` | 规程、红线、阈值、路由 | 只在规则变化时改，**不追加案例** |
+| `references/<规格>-*.md`（如 `15mm-f14-1-1.73.md`） | 该类**当前最优做法快照**：指标基线、流程、参数速查、本类坑 | **换代时整段重写**，旧代压成附录一条，不按轮次追加 |
+| `cases-and-history.md` | 叙事与症状索引：出过什么事、怎么发现的 | 只追加"教训"，**不追加数据表**（数据放项目报告） |
+
+**准入三问**——任何经验写进 references 之前逐条过，三问全过才写：
+
+1. 换个规格（焦距 / 片数 / F 数 / 视场）还成立吗？
+2. 这句话描述的是**机制**，还是**这一个设计里的数**？
+3. 下个项目得出相反结论时，这条会不会误导？
+
+数值答案写进项目报告；只有"机制 + 适用边界"配一个实测证据，才进 skill。**行数预算由 lint 强制**（类基线 ≤120 行、其余 ≤500 行，超 90 % 告警）：接近上限时压缩或迁移，不追加。

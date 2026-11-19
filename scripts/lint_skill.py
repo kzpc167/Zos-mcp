@@ -20,6 +20,15 @@ REFS = SKILL_DIR / "references"
 # 主文件允许的最大行数（超过会拖慢 agent 读取）
 SKILL_MAX_LINES = 300
 
+# reference 行数预算：类基线快照写死上限（换代重写而非追加），其余给宽裕上限
+REF_BUDGET = {
+    "15mm-f14-1-1.73.md": 120,      # 项目类基线：快照，不追加
+    "cases-and-history.md": 420,     # 叙事与症状索引：只追加教训
+    "design-principles.md": 500,     # 原理与阈值
+}
+REF_BUDGET_DEFAULT = 500
+REF_WARN_RATIO = 0.9
+
 # 引用形如：§P1 / §P6.3 / §T11 / §C4.8 / §3.1（主文件内部章节）
 RE_REF = re.compile(r"§(P\d+(?:\.\d+)?|T\d+(?:\.\d+)?|C\d+(?:\.\d+)?|[A-H]|\d+(?:\.\d+)?)")
 # 定义形如：## P1.xxx / ### P6.3 xxx / ## T15. xxx / ## C4. xxx / ### 3.1 xxx
@@ -62,6 +71,17 @@ def main() -> int:
         errors.append(f"SKILL.md 有 {n} 行，超过上限 {SKILL_MAX_LINES}")
     else:
         print(f"[OK] SKILL.md {n} 行 (<= {SKILL_MAX_LINES})")
+
+    # 1b. reference 行数预算（超过 = 该压缩或换代重写，不是继续追加）
+    for p in sorted(REFS.glob("*.md")):
+        rn = len(p.read_text(encoding="utf-8").splitlines())
+        cap = REF_BUDGET.get(p.name, REF_BUDGET_DEFAULT)
+        if rn > cap:
+            errors.append(
+                f"{p.name} 有 {rn} 行，超过预算 {cap}：压缩、拆文件或换代重写，不要追加"
+            )
+        elif rn > cap * REF_WARN_RATIO:
+            warns.append(f"{p.name} {rn}/{cap} 行，接近上限，下次改动应压缩而非追加")
 
     # 2. 路由表里点名的文件必须存在
     routing = SKILL.read_text(encoding="utf-8")

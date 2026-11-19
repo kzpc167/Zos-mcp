@@ -156,12 +156,17 @@ close all;
 |---|---|---|
 | 工具报找不到 MATLAB | `--matlab-root` 路径错或 R2025b 未装 | 查 `.vscode/mcp.json`，重启 MCP 服务器 |
 | 首次调用长时间无响应 | MATLAB 冷启动 | 等 60 s；仍无响应看 `matlab-mcp/logs/server-*.log` |
+| **每次调用都 `timeout waiting for worker to start`，但客户端仍显示 connected** | ① 启动时的 eager 初始化失败后，server 握着死会话不再重试；② 日志里 21:22 之类的时间点通常伴随**两个 MATLAB 进程同时被拉起**、且 **`toolbox_cache-*.xml` 被写成 0 字节**（桌面模式启动即卡住） | ① `Stop-Process` 结束挂死的 MATLAB；② 把 `%LOCALAPPDATA%\MathWorks\MATLAB\R20xx\toolbox_cache-*.xml` 改名备份让它重建；③ 手动 `matlab -r matlab.engine.shareEngine` 起一个共享引擎，让 `--matlab-session-mode=auto` 走 attach；④ 仍不行再重启 MCP server。**"connected" 只代表 stdio 握手成功，不代表 MATLAB 挂上了**，判据是能否跑通一次 `detect_matlab_toolboxes` |
+| 两个 `matlab-mcp-server` 进程同时存在，偶发结果错乱/超时 | 两个客户端（如 Claude Code 扩展 + VS Code MCP）各拉了一个 server，`UseSingleMATLABSession=true` 时它们共享同一个 MATLAB 会话，单线程被互相插队 | **同一个 MATLAB MCP 只由一个客户端持有**；两个都开着时禁止同时调用 |
 | `Connection closed` / 会话失联 | 并发调用、`restoredefaultpath`、脚本崩溃 | 重启 VS Code 的 MCP 服务器（MATLAB → Restart） |
+| **MCP 一直超时，但 `MATLAB.exe` 在跑（`-r matlab.engine.shareEngine`）** | server 的会话已死且不会自愈，客户端也无法中途重连 | **COM 直连**：`.venv\Scripts\python.exe` 里 `win32com.client.Dispatch("Matlab.Application")` → `h.Execute("cd('...'); script_name")`。仍是真 MATLAB 计算与出图，不是 Python 替代。**注意 `Execute` 只回错误文本、不回 `fprintf` 输出** —— 关键中间量写进日志文件再读 |
 | 中文变方块/乱码 | 图内字体没设 | §5 的字体设置 |
 | `evaluate` 没有输出 | 只执行没打印 | 显式 `disp`/`fprintf` |
 | 路径含空格或中文报错 | 拼接字符串未加引号 | 用绝对路径 + `fullfile`，脚本内避免 `cd` 到中文目录 |
 | 缺 `prctile`/`polyfit` 等 | 工具箱未装 | 先 `detect_matlab_toolboxes`；缺失时用排序法算分位数（见 recipes） |
 | 输出图没生成 | `figs/` 目录不存在或 figure 不可见 | 先 `mkdir`，再 `Visible','off'` |
+| 循环变量莫名变成小数 / 数组索引报"必须为正整数" | **嵌套函数与父函数共享同名变量**（MATLAB 语义，不报错） | 父作用域的循环变量、结果数组全部改名（如 `pp/qq/Yl/Ul`）；nested function 里绝不复用父层名字 |
+| 矩阵幂报 `mpower` 维度错误 | 向量用了 `^` 而不是 `.^` | 局部函数里遇到向量参数一律 `.^`、`./` |
 
 MATLAB MCP 连接异常的长期监控：`powershell -File .\scripts\watch_matlab_mcp.ps1`（见仓库 README）。
 
