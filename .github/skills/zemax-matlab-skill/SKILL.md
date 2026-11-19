@@ -165,8 +165,10 @@ close all;
 | 路径含空格或中文报错 | 拼接字符串未加引号 | 用绝对路径 + `fullfile`，脚本内避免 `cd` 到中文目录 |
 | 缺 `prctile`/`polyfit` 等 | 工具箱未装 | 先 `detect_matlab_toolboxes`；缺失时用排序法算分位数（见 recipes） |
 | 输出图没生成 | `figs/` 目录不存在或 figure 不可见 | 先 `mkdir`，再 `Visible','off'` |
+| Zemax 分析窗口"导出图片"只有 ~1.5 KB、打不开 | ZOS-API 对 Analysis 只写**文本**，没有位图接口 | 原生版式走 GUI「保存为 BMP」，再用本 skill `imread`→`imwrite` 转 PNG（不改像素）；数字仍从 `export_text` 解析 |
 | 循环变量莫名变成小数 / 数组索引报"必须为正整数" | **嵌套函数与父函数共享同名变量**（MATLAB 语义，不报错） | 父作用域的循环变量、结果数组全部改名（如 `pp/qq/Yl/Ul`）；nested function 里绝不复用父层名字 |
 | 矩阵幂报 `mpower` 维度错误 | 向量用了 `^` 而不是 `.^` | 局部函数里遇到向量参数一律 `.^`、`./` |
+| 双纵轴图上 `text` 标注凭空消失 | `yyaxis right` 之后 `text` 用的是**右轴**坐标系，左轴量程的 y 值直接落到图外 | 所有左轴标注写在 `yyaxis left` 段内；切右轴只画右轴曲线 |
 
 MATLAB MCP 连接异常的长期监控：`powershell -File .\scripts\watch_matlab_mcp.ps1`（见仓库 README）。
 

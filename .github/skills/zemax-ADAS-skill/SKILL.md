@@ -204,6 +204,13 @@ MATLAB MCP（`mcp__matlab__*`）worker 起不来时（`timeout waiting for worke
 点列图 `export_spot_diagram_image` 的 RMS 用的是**全波混合 + 不同采样**，与 `get_image_quality`
 的逐视场 RMS（主波长口径）不完全等值，报告里以 `get_image_quality` 为准、点列图看形状。
 
+**分析窗口（场曲/畸变、FFT MTF vs 视场、相对照度）的位图拿不到**：`export_analysis_data` 的图片导出
+对本类分析只写**文本**（实测 png/bmp/jpg/wmf 四个后缀全是 1511 B 文本、`valid_image=false`），
+结构化 `DataSeries` 也常不规范（场曲 `y_data` 大量空行、条目是 `"(0.98, 1.48)"` 字符串）。
+处理：**数字**从 `export_text` 的 UTF-16 文本解析（仍是 Zemax 原生值）；**原生版式**由 GUI 分析窗口
+「保存为 BMP」→ MATLAB `imread`→`imwrite` 转 PNG 入库（不改像素）。报告里两套并存：
+**数字以文本导出为准，版式以原生窗口为证，重绘图只作阅读辅助**。
+
 ## 6. 异常决策树
 
 出症状先读 `references/cases-and-history.md` C5.1（症状 → 首查动作 → 对应 P/T/C 节），不要凭直觉改设计。
