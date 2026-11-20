@@ -1,13 +1,13 @@
 % fcd_IRcut_20261120.m
 % 加 IR-CUT 版：场曲 + 畸变 验收图（两联图）
-% 输入：zemax-ADAS/layouts/analysis/field_curvature_distortion.txt（Zemax 原生导出，UTF-16）
+% 输入：zemax-ADAS/layouts/ir_cut/analysis/field_curvature_distortion.txt（Zemax 原生导出，UTF-16）
 %       列：Y角度 | 子午位移 | 矢高位移 | 实际高度 | 参考高度 | 畸变%
-% 输出：zemax-ADAS/layouts/FCD_IRcut.png（300 dpi）
+% 输出：zemax-ADAS/layouts/ir_cut/FCD_IRcut.png（300 dpi）
 % 口径：3 个波长块 × 101 点；场曲取相对轴上点的位移差；畸变为 Zemax 报告的百分比
 
 root = fileparts(fileparts(mfilename('fullpath')));
-src  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis', 'field_curvature_distortion.txt');
-dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'FCD_IRcut.png');
+src  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'analysis', 'field_curvature_distortion.txt');
+dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'FCD_IRcut.png');
 assert(isfile(src), '找不到分析导出文件：%s', src);
 
 fid = fopen(src, 'rb');

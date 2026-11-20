@@ -2,12 +2,12 @@
 % 左：GUI「鬼像焦点生成器」导出（真实光线，含像面反射），文件：
 %     zemax-ADAS/加窗口鬼影分析1-15.txt / 1-14.txt / 14-15.txt（UTF-16LE）
 % 右：本引擎一阶 y-u 双次反射枚举（路线 B），同一套面表
-% 输出：layouts/GHOST_IRcut.png（三联图）+ 控制台联合排序表
+% 输出：layouts/ir_cut/GHOST_IRcut.png（三联图）+ 控制台联合排序表
 clear; clc; close all;
 
 root = fileparts(fileparts(mfilename('fullpath')));
 za   = fullfile(root, 'zemax-ADAS');
-outd = fullfile(za, 'layouts');
+outd = fullfile(za, 'layouts', 'ir_cut');
 
 %% ---------- 1. 面表（Zemax 公差Q5 副本；nd 取自 CDGM.AGF d 线）----------
 % 列：R(mm)  t 到下一面(mm)  本面之后的折射率  半口径(mm)

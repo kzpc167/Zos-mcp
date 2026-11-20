@@ -1,13 +1,13 @@
 %% 15 mm F/1.4 定心版 + IR-CUT/CG —— 原生复色衍射 MTF 曲线
 % 数据：OpticStudio 原生 FFT MTF 文本导出
-%       zemax-ADAS/layouts/analysis/fft_mtf.txt（UTF-16，制表符分隔）
+%       zemax-ADAS/layouts/ir_cut/analysis/fft_mtf.txt（UTF-16，制表符分隔）
 % 口径：复色 0.486–0.656 µm，像面，5 个视场（角度定义），子午/弧矢
 % 结构：第 1 块 = 衍射极限，第 2–6 块 = 视场 1–5，每块 121 行（0–120 lp/mm）
 clear; clc; close all;
 
 rootDir = 'D:\Zemax-mcp';
-srcFile = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'analysis', 'fft_mtf.txt');
-figDir  = fullfile(rootDir, 'zemax-ADAS', 'layouts');
+srcFile = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'ir_cut', 'analysis', 'fft_mtf.txt');
+figDir  = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'ir_cut');
 
 %% 1. 解析原生文本（按字节读，UTF-16LE 带 BOM）
 fid = fopen(srcFile, 'rb');

@@ -5,11 +5,11 @@
 % 光瞳采样：11 条光线横跨光阑（p = 0..1），η = 不被口径拦截的比例
 % 强度：I = R_i·R_j·(1-R)^N_trans·η；AR 残余 0.5%，像面按未镀膜 CMOS 窗 2%
 % 弥散 D：存活光线在像面的落点跨度（真实鬼影斑直径，不是离焦估计）
-% 输出：matlab/data/ghost_pairs_final.csv + layouts/ghost_firstorder.png
+% 输出：matlab/data/ghost_pairs_final.csv + layouts/no_ir_cut/ghost_firstorder.png
 clear; clc; close all;
 
 rootDir = 'D:\Zemax-mcp';
-outPng  = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'ghost_firstorder.png');
+outPng  = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'no_ir_cut', 'ghost_firstorder.png');
 outCsv  = fullfile(rootDir, 'matlab', 'data', 'ghost_pairs_final.csv');
 logFile = fullfile(rootDir, 'tmp', 'ghost_diag.txt');
 if ~exist(fileparts(outCsv), 'dir'); mkdir(fileparts(outCsv)); end

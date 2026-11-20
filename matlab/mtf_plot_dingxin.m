@@ -7,7 +7,7 @@ clear; close all;
 
 root    = 'D:\Zemax-mcp';
 csvPath = fullfile(root, 'matlab', 'data', 'mtf_curve_dingxin.csv');
-outDir  = fullfile(root, 'zemax-ADAS', 'layouts');
+outDir  = fullfile(root, 'zemax-ADAS', 'layouts', 'no_ir_cut');
 if ~exist(outDir, 'dir'); mkdir(outDir); end
 
 T = readtable(csvPath);

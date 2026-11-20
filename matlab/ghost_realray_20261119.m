@@ -5,7 +5,7 @@ function ghost_realray_20261119()
 clc; close all;
 rootDir = 'D:\Zemax-mcp';
 outCsv = fullfile(rootDir,'matlab','data','ghost_realray.csv');
-outPng = fullfile(rootDir,'zemax-ADAS','layouts','ghost_realray_fields.png');
+outPng = fullfile(rootDir,'zemax-ADAS','layouts', 'no_ir_cut','ghost_realray_fields.png');
 
 R  = [ 30.292444786227495; 15.440361836161781; 19.594321598855050; -28.689051655560153; ...
        Inf; 10.656502330960160; -37.872933789988410; 5.594418893802987; ...

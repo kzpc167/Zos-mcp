@@ -1,13 +1,13 @@
 % cra_curve_20261119.m
 % CRA（主光线角）vs 像高，三波长叠加，标注峰值与客户限值
 % 数据：matlab/data/cra_vs_field_20261119.csv（由临时 RAID 操作数逐视场读取，读完已删除）
-% 像高：由 layouts/analysis/field_curvature_distortion.txt 的 d 线「实际高度」插值得到
-% 输出：layouts/CRA_curve.png（300 dpi）
+% 像高：由 layouts/no_ir_cut/analysis/field_curvature_distortion.txt 的 d 线「实际高度」插值得到
+% 输出：layouts/no_ir_cut/CRA_curve.png（300 dpi）
 
 root = fileparts(fileparts(mfilename('fullpath')));
 csvp = fullfile(root, 'matlab', 'data', 'cra_vs_field_20261119.csv');
-fcp  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis', 'field_curvature_distortion.txt');
-dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'CRA_curve.png');
+fcp  = fullfile(root, 'zemax-ADAS', 'layouts', 'no_ir_cut', 'analysis', 'field_curvature_distortion.txt');
+dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'no_ir_cut', 'CRA_curve.png');
 CRA_SPEC = 18.0;                     % 客户限值（沿用本项目规格表，换客户改这一行）
 F_MAX    = 17.42699056;              % 最大视场角（度）
 

@@ -2,13 +2,13 @@
 % 加 IR-CUT 版 CRA（主光线角）vs 像高，三波长叠加，标注峰值与客户限值
 % 数据：matlab/data/cra_vs_field_IRcut_20261120.csv
 %       （由 33 条临时 RAID 操作数逐视场读取，读完已删除）
-% 像高：由 zemax-ADAS/layouts/analysis/field_curvature_distortion.txt 的 d 线「实际高度」插值
-% 输出：zemax-ADAS/layouts/CRA_curve_IRcut.png（300 dpi）
+% 像高：由 zemax-ADAS/layouts/ir_cut/analysis/field_curvature_distortion.txt 的 d 线「实际高度」插值
+% 输出：zemax-ADAS/layouts/ir_cut/CRA_curve_IRcut.png（300 dpi）
 
 root = fileparts(fileparts(mfilename('fullpath')));
 csvp = fullfile(root, 'matlab', 'data', 'cra_vs_field_IRcut_20261120.csv');
-fcp  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis', 'field_curvature_distortion.txt');
-dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'CRA_curve_IRcut.png');
+fcp  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'analysis', 'field_curvature_distortion.txt');
+dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'CRA_curve_IRcut.png');
 CRA_SPEC = 18.0;
 F_MAX    = 17.42699056;
 

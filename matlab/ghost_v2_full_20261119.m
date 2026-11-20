@@ -7,7 +7,7 @@ clear; clc; close all;
 
 rootDir = 'D:\Zemax-mcp';
 outCsv  = fullfile(rootDir,'matlab','data','ghost_v2_full.csv');
-outPng  = fullfile(rootDir,'zemax-ADAS','layouts','ghost_v2_vs_zemax.png');
+outPng  = fullfile(rootDir,'zemax-ADAS','layouts', 'no_ir_cut','ghost_v2_vs_zemax.png');
 
 % ---------------- 处方 ----------------
 R = [ 30.292444786227495;  15.440361836161781;  19.594321598855050; -28.689051655560153; ...

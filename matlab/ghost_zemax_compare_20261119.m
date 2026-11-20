@@ -1,13 +1,13 @@
 %% Zemax 鬼像焦点生成器 ↔ 一阶 y–nu 模型 交叉验证
 % 输入：matlab/data/ghost_zemax_20261119.csv  （GUI 输出转录，55 组）
 %       matlab/data/ghost_pairs_final.csv      （一阶模型，66 组，含像面反射）
-% 输出：layouts/ghost_zemax_vs_firstorder.png
+% 输出：layouts/no_ir_cut/ghost_zemax_vs_firstorder.png
 clear; clc; close all;
 
 rootDir = 'D:\Zemax-mcp';
 Z = readtable(fullfile(rootDir,'matlab','data','ghost_zemax_20261119.csv'));
 F = readtable(fullfile(rootDir,'matlab','data','ghost_pairs_final.csv'));
-outPng = fullfile(rootDir,'zemax-ADAS','layouts','ghost_zemax_vs_firstorder.png');
+outPng = fullfile(rootDir,'zemax-ADAS','layouts', 'no_ir_cut','ghost_zemax_vs_firstorder.png');
 
 IMG_SD = 4.6563;         % 像面半口径（仅作参考，不用于判落点）
 % 注意：Zemax「到鬼像焦点的距离」以像面为原点（2026-11-19 核对：12-13 组差 0.6 µm），

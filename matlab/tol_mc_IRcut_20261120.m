@@ -1,15 +1,15 @@
 %% Q5 公差分析出图（IR-CUT + CG 版，唯一有效口径）
-% 输入：zemax-ADAS/layouts/analysis/tol_mc_mtf_q5.txt
+% 输入：zemax-ADAS/layouts/ir_cut/analysis/tol_mc_mtf_q5.txt
 %       （Zemax 原始报告，UTF-16LE；判据 DiffMTFAverage @120 lp/mm，采样 2，
 %         单测试波长 0.588，9 视场，补偿器 = S12 后焦 ±0.2 mm，500 次 MC）
 %       模型：16 面；TDE 60 行只覆盖 S1–S12，窗口板 S13/S14 零公差
-% 输出：layouts/TOL_yield_IRcut.png      灵敏度 Top-N + 良率摘要
-%       layouts/mc_yield_q5_IRcut.png   蒙特卡洛分布 + 良率—规格曲线
+% 输出：layouts/ir_cut/TOL_yield_IRcut.png      灵敏度 Top-N + 良率摘要
+%       layouts/ir_cut/mc_yield_q5_IRcut.png   蒙特卡洛分布 + 良率—规格曲线
 clear; clc; close all;
 
 root = fileparts(fileparts(mfilename('fullpath')));
-ana  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis');
-outd = fullfile(root, 'zemax-ADAS', 'layouts');
+ana  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'analysis');
+outd = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut');
 src  = fullfile(ana, 'tol_mc_mtf_q5.txt');
 assert(isfile(src), '找不到公差报告：%s', src);
 

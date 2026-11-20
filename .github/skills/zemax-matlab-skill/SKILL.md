@@ -45,7 +45,7 @@ mcp__zemax-opticstudio__*  →  JSON / export 文本  →  CSV (matlab/data/)  �
 | MATLAB **不要**自己连 ZOS-API | 会和 MCP 抢同一个 COM 实例，导致 `Connection closed`（本项目未验证，不值得试） |
 | 每个 MCP 内部**严格串行** | MATLAB 会话是单线程的；同一条消息里发两个 MATLAB 调用必出问题 |
 | 跨 MCP 也要串行 | 先把 Zemax 数据全部取完，再一次性交给 MATLAB，不要来回横跳 |
-| 大数组不进对话 | 工具返回的 JSON 由 agent 落成 CSV，或直接读 `layouts/analysis/*.txt` |
+| 大数组不进对话 | 工具返回的 JSON 由 agent 落成 CSV，或直接读 `layouts/<版本>/analysis/*.txt`（版本目录如 `ir_cut/`、`no_ir_cut/`；工具默认仍导出到 `layouts/analysis/`，需手动归档） |
 
 **Zemax 侧取数**（本项目实测可用）：
 

@@ -1,12 +1,12 @@
 % ri_curve_IRcut_20261120.m
 % 加 IR-CUT 版（TOTR 30.0）相对照度曲线，报告级重绘
-% 输入：zemax-ADAS/layouts/analysis/relative_illumination.txt（Zemax 原生 Relative Illumination 导出，UTF-16）
-% 输出：zemax-ADAS/layouts/RI_curve_IRcut.png（300 dpi）
+% 输入：zemax-ADAS/layouts/ir_cut/analysis/relative_illumination.txt（Zemax 原生 Relative Illumination 导出，UTF-16）
+% 输出：zemax-ADAS/layouts/ir_cut/RI_curve_IRcut.png（300 dpi）
 % 口径：横轴 Y 视场角；左轴 Rel. Ill（轴上=1）；右轴 F/# 效率；红色虚线 = 60 % 规格
 
 root = fileparts(fileparts(mfilename('fullpath')));
-src  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis', 'relative_illumination.txt');
-dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'RI_curve_IRcut.png');
+src  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'analysis', 'relative_illumination.txt');
+dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'ir_cut', 'RI_curve_IRcut.png');
 assert(isfile(src), '找不到分析导出文件：%s', src);
 
 % ---- 读 UTF-16LE（带 BOM），只取数值 ----

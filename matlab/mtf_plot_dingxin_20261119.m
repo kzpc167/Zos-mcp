@@ -1,12 +1,12 @@
 %% 终版 15 mm F/1.4 定心版 —— 复色衍射 MTF 曲线（0~120 lp/mm 完整采样）
-% 数据：OpticStudio 原生 FFT MTF 文本导出 layouts/analysis/fft_mtf.txt
+% 数据：OpticStudio 原生 FFT MTF 文本导出 layouts/no_ir_cut/analysis/fft_mtf.txt
 %       → tmp/parse_mtf_curves.py → matlab/data/mtf_curves_final.csv
 % 口径：复色 0.486~0.656 µm，像面，5 个视场，子午/弧矢
 clear; clc; close all;
 
 rootDir = 'D:\Zemax-mcp';
 csvFile = fullfile(rootDir, 'matlab', 'data', 'mtf_curves_final.csv');
-figDir  = fullfile(rootDir, 'zemax-ADAS', 'layouts');
+figDir  = fullfile(rootDir, 'zemax-ADAS', 'layouts', 'no_ir_cut');
 if ~exist(figDir, 'dir'); mkdir(figDir); end
 
 T  = readtable(csvFile);

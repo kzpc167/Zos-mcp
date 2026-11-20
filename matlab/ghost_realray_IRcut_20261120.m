@@ -3,7 +3,7 @@ function ghost_realray_IRcut_20261120()
 % 目的：回答「鬼影光斑会不会随视场扫出传感器」，补 §6.7 的离轴缺口
 % 旋转对称 ⇒ 任一方位场点等价于"坐标轴转到该方向的子午面"，二维追迹是精确的
 % 数据：Zemax GUI 导出 zemax-ADAS/加窗口鬼影分析1-15.txt（91 组）作轴向对账
-% 输出：matlab/data/ghost_realray_IRcut.csv + layouts/ghost_realray_fields_IRcut.png
+% 输出：matlab/data/ghost_realray_IRcut.csv + layouts/ir_cut/ghost_realray_fields_IRcut.png
 clc; close all;
 rootDir = fileparts(fileparts(mfilename('fullpath')));
 
@@ -240,7 +240,7 @@ sgtitle('鬼影随视场行为　15mm F/1.4 + IR-CUT/CG 板　|　二维子午�
     'FontSize', 12);
 set(findall(fig,'-property','FontName'),'FontName','Microsoft YaHei');
 set(findall(fig,'-property','FontSize'),'FontSize',9);
-outPng = fullfile(rootDir,'zemax-ADAS','layouts','ghost_realray_fields_IRcut.png');
+outPng = fullfile(rootDir,'zemax-ADAS','layouts', 'ir_cut','ghost_realray_fields_IRcut.png');
 exportgraphics(fig, outPng, 'Resolution', 300); close(fig);
 fprintf('\nCSV: %s\n图: %s\n', outCsv, outPng);
 

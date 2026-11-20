@@ -1,12 +1,12 @@
 % ri_curve_20261119.m
 % 从 Zemax 原生分析文本导出重绘相对照度曲线（报告级）
-% 输入：layouts/analysis/relative_illumination.txt（UTF-16，Zemax Relative Illumination 导出）
-% 输出：layouts/RI_curve.png（300 dpi）+ 命令行数值表
+% 输入：layouts/no_ir_cut/analysis/relative_illumination.txt（UTF-16，Zemax Relative Illumination 导出）
+% 输出：layouts/no_ir_cut/RI_curve.png（300 dpi）+ 命令行数值表
 % 口径：横轴 Y 视场角；左轴 Rel. Ill（无量纲，轴上=1）；右轴 F/# 效率；红色虚线 = 60% 规格
 
 root = fileparts(fileparts(mfilename('fullpath')));          % matlab/ 的上一级
-src  = fullfile(root, 'zemax-ADAS', 'layouts', 'analysis', 'relative_illumination.txt');
-dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'RI_curve.png');
+src  = fullfile(root, 'zemax-ADAS', 'layouts', 'no_ir_cut', 'analysis', 'relative_illumination.txt');
+dst  = fullfile(root, 'zemax-ADAS', 'layouts', 'no_ir_cut', 'RI_curve.png');
 assert(isfile(src), '找不到分析导出文件：%s', src);
 
 % ---- 读 UTF-16（LE，带 BOM），只取数值 ----
