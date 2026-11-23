@@ -1,7 +1,9 @@
 # MATLAB 代码模板（Zemax 辅助）
 
 > 全部代码为**基础 MATLAB**，不依赖工具箱（除已注明处）。注释中文，R2020a+ 默认 UTF-8 可直接用。
-> 落地方式：写成 `matlab/<任务>_<日期>.m`，再用 `mcp__matlab__run_matlab_file` 跑；不要在 `evaluate_matlab_code` 里塞长代码。
+> 落地方式：写成 `<项目目录>/<任务>_<日期>.m`（如 `zemax-ADAS/stopfix_v8/`），
+> 再用 `mcp__matlab__run_matlab_file` 跑；不要在 `evaluate_matlab_code` 里塞长代码。
+> 下文相对路径均指**项目目录**，脚本一律自定位：`base = fileparts(mfilename('fullpath'));`
 
 ## 0. 开工三件事
 
@@ -10,9 +12,11 @@
 disp(version)
 disp(matlabroot)
 
-% 2) 建目录（幂等）
-for d = ["matlab/data","matlab/figs"]
-    if ~isfolder(d), mkdir(d); end
+% 2) 建目录（幂等；base = 脚本所在项目目录）
+base = fileparts(mfilename('fullpath'));
+if isempty(base); base = pwd; end
+for d = {fullfile(base,'data'), fullfile(base,'figs'), fullfile(base,'analysis')}
+    if ~isfolder(d{1}), mkdir(d{1}); end
 end
 
 % 3) 固定随机数，保证结果可复现
@@ -56,7 +60,7 @@ r = linspace(0, 8, 2001);              % 8 mm 通光半径
 
 T = table(r.', z.', dz.', d2z.', ...
     'VariableNames', {'r_mm','sag_mm','slope','curvature'});
-writetable(T, 'matlab/data/sag.csv');
+writetable(T, 'data/sag.csv');
 ```
 
 ## 2. 反曲点（斜率变号）与拐点（二阶导变号）
@@ -169,7 +173,7 @@ end
 ```
 
 ```matlab
-x = readmatrix('matlab/data/tol_mc.csv');
+x = readmatrix('data/tol_mc.csv');
 s = mc_stats(x, 5.0, true);            % 规格：RMS <= 5.0 um
 fprintf('N=%d  yield=%.1f%%  (95%% CI %.1f-%.1f%%)\n', ...
     s.N, 100*s.yield, 100*s.yield_ci);
@@ -180,7 +184,7 @@ histogram(x, 30, 'FaceColor', [0.30 0.45 0.70], 'EdgeColor', 'w');
 xline(spec, 'r--', 'LineWidth', 1.2);
 xlabel('RMS spot radius (\mum)'); ylabel('Count');
 title(sprintf('Monte Carlo, N=%d, yield=%.1f%%', s.N, 100*s.yield));
-exportgraphics(gcf, 'matlab/figs/tol_mc_hist.png', 'Resolution', 300);
+exportgraphics(gcf, 'figs/tol_mc_hist.png', 'Resolution', 300);
 close all;
 ```
 
@@ -191,7 +195,7 @@ close all;
 输入 CSV：`[T_C, bfl_drift_um]`。
 
 ```matlab
-D = readmatrix('matlab/data/thermal.csv');
+D = readmatrix('data/thermal.csv');
 T = D(:,1); y = D(:,2);
 
 p  = polyfit(T, y, 2);
@@ -207,7 +211,7 @@ Tf = linspace(min(T), max(T), 200);
 plot(T, y, 'o', Tf, polyval(p, Tf), '-', 'LineWidth', 1.2);
 xlabel('Temperature (\circC)'); ylabel('BFL drift (\mum)');
 legend('MCE data', 'quadratic fit', 'Location', 'best'); grid on;
-exportgraphics(gcf, 'matlab/figs/thermal_defocus.png', 'Resolution', 300);
+exportgraphics(gcf, 'figs/thermal_defocus.png', 'Resolution', 300);
 close all;
 ```
 
@@ -218,7 +222,7 @@ close all;
 CSV 约定：第 1 列自变量，其后每个视场一列。
 
 ```matlab
-M = readmatrix('matlab/data/mtf.csv');
+M = readmatrix('data/mtf.csv');
 f = M(:,1); mtf = M(:,2:end);
 
 plot(f, mtf, 'LineWidth', 1.2);
@@ -227,7 +231,7 @@ xlim([0 120]); ylim([0 1]); grid on;
 legend(compose('Field %d', 1:size(mtf,2)), 'Location', 'northeast');
 set(findall(gcf,'-property','FontName'), 'FontName', 'Microsoft YaHei');
 set(gca, 'FontSize', 9, 'LineWidth', 0.8, 'GridAlpha', 0.15);
-exportgraphics(gcf, 'matlab/figs/mtf.png', 'Resolution', 300);
+exportgraphics(gcf, 'figs/mtf.png', 'Resolution', 300);
 close all;
 ```
 
@@ -255,7 +259,7 @@ with open(sys.argv[2], "w", newline="", encoding="utf-8") as f:
 
 ```matlab
 close all;
-fprintf('DONE: 图在 matlab/figs/，数据在 matlab/data/\n');
+fprintf('DONE: 图在 figs/，数据在 data/\n');
 ```
 
 一次 MATLAB 调用里把读数据、算、出图、关图全部做完；不要把同一个任务拆成五六次 `evaluate_matlab_code`，既慢又容易在会话里丢状态。

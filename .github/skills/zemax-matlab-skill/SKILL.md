@@ -34,7 +34,7 @@ description: '在 Zemax 光学设计流程中调用 MATLAB MCP 做辅助计算�
 ## 1. 两个 MCP 的边界与数据流
 
 ```
-mcp__zemax-opticstudio__*  →  JSON / export 文本  →  CSV (matlab/data/)  →  mcp__matlab__*  →  图/数值
+mcp__zemax-opticstudio__*  →  JSON / export 文本  →  CSV (<项目>/data/)  →  mcp__matlab__*  →  图/数值
                                                                                           ↓
                                                                               写回报告 .md / .png
 ```
@@ -77,13 +77,28 @@ mcp__zemax-opticstudio__*  →  JSON / export 文本  →  CSV (matlab/data/)  �
 
 ## 3. 数据交换规范
 
-目录（用到再建，脚本入库，数据不入库）：
+目录（**随设计项目存放，不建独立的 `matlab/` 目录**；脚本入库，数据按需）：
 
 ```
-matlab/            可复现脚本（.m），命名 <任务>_<日期>.m
-matlab/data/       交换用 CSV（临时）
-matlab/figs/       输出图（.png，300 dpi）
+zemax-ADAS/<版本>/       例如 stopfix_v8/
+  <任务>_<日期>.m        可复现脚本
+  data/                  交换用 CSV
+  figs/                  输出图（.png，300 dpi）
+  analysis/              脚本生成的文本摘要 / 日志
+  legacy_<日期>/         仅当旧脚本还有独有数据、确需留档才建；与现行产物重复的直接删
 ```
+
+脚本内禁止写死绝对路径，统一自定位（拷走目录即可重跑）：
+
+```matlab
+base = fileparts(mfilename('fullpath'));
+if isempty(base); base = pwd; end
+dat = fullfile(base,'data');
+out = fullfile(base,'figs');
+```
+
+> 理由：图/CSV 与生成它的脚本同处一目录，才能从产物反查到脚本，也避免多个项目共用
+> 一个 `matlab/data/` 时互相覆盖。旧版本（v5/v6/v7）清理时，同版本的 MATLAB 产物一并处理。
 
 CSV 约定：
 
@@ -128,6 +143,14 @@ JSON 只在必要时用；`jsondecode` 出来是嵌套 struct，转 CSV 反而�
 
 MTF vs 频率、RI vs 视场、畸变 vs 视场、RMS vs 视场，统一：轴标签带单位、线宽 1.2、字号 9–10、淡网格、图例带视场角。用 `exportgraphics(...,'Resolution',300)`，不要 `saveas`。
 
+**场曲/畸变图必须复刻 Zemax 分析窗的画法，否则和用户导出的图对不上**（2026-11-21 实测被质疑过一次）：
+
+- 纵轴 = 视场角（0 在下、最大视场在上），横轴 = 位移(mm) / 畸变(%)；不是常见的"横轴视场"。
+- 场曲画 `Tan位移 / Sag位移` 的**原始值，不要减轴上值**。轴上三条波长本来就不重合
+  （示例 −0.0035 / −0.0006 / +0.0102 mm，即轴向色差），归零后形状全错。
+- 三波长全部画（蓝 / 绿 / 红 = F / d / C），实线 = T、点线 = S，并画 x=0 竖线 + 0.01 mm 细网格。
+- Zemax 页脚「子午场曲 / 弧矢场曲 / 最大畸变」都是**曲线峰峰值**，不是 max|.|，报告里要按峰峰引用。
+
 ### 4.5 鬼影一阶筛查
 
 把系统按反射面**展开**成等效序列（反射 = 曲率反号 + 传播方向反向），MATLAB 算鬼影像的轴向位置与弥散，给出"会不会落到像面上"的初判。
@@ -140,9 +163,11 @@ MATLAB 的 `fmincon`/`ga` 想调 Zemax，只能靠"写参数 → 跑 Zemax → �
 ## 5. 出图规范
 
 ```matlab
+base = fileparts(mfilename('fullpath'));   % 脚本所在项目目录
+if isempty(base); base = pwd; end
 set(findall(gcf,'-property','FontName'),'FontName','Microsoft YaHei');  % 中文不出方块
 set(gca,'FontSize',9,'LineWidth',0.8,'GridAlpha',0.15);
-exportgraphics(gcf,'matlab/figs/xxx.png','Resolution',300);
+exportgraphics(gcf,fullfile(base,'figs','xxx.png'),'Resolution',300);
 close all;
 ```
 
@@ -178,8 +203,9 @@ MATLAB MCP 连接异常的长期监控：`powershell -File .\scripts\watch_matla
 - [ ] 单位写在列名和轴标签上
 - [ ] 统计结论带样本量 N 与置信区间
 - [ ] 面型/热/统计的结论**已回 Zemax 复核**
-- [ ] 图 300 dpi、中文正常、文件名在 `matlab/figs/`
-- [ ] 脚本落在 `matlab/`，别人能一键重跑
+- [ ] 图 300 dpi、中文正常、落在**该项目目录的** `figs/`
+- [ ] 脚本落在此次设计的项目目录（如 `zemax-ADAS/<版本>/`），目录拷走可一键重跑
+- [ ] 脚本里没有写死的绝对路径，数据从 `fullfile(base,'data')` 取
 - [ ] 没有把大数组贴进对话，也没有并发调用 MATLAB
 
 ## 8. 代码模板

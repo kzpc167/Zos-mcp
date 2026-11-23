@@ -107,6 +107,33 @@ scripts/             重启脚本、探针脚本、技能 lint
 zemax-ADAS/          设计案例与交付文档
 ```
 
+## MATLAB 文件存放约定（2026-11-23 起）
+
+MATLAB 脚本、数据和图**随所属设计项目存放**，不再集中放进独立的 `matlab/` 目录：
+
+```
+zemax-ADAS/<版本>/                 例如 stopfix_v8/
+  *.m                             可复现脚本，命名 <任务>_<日期>.m
+  data/                            交换 CSV（一份数据一份文件）
+  figs/                            300 dpi PNG
+  analysis/                        脚本生成的文本摘要 / 日志
+  legacy_<日期>/                   仅当旧脚本有独有数据、确需留档才建；冗余直接删
+```
+
+脚本内**禁止写死绝对路径**，统一用：
+
+```matlab
+base = fileparts(mfilename('fullpath'));
+if isempty(base); base = pwd; end
+dat = fullfile(base,'data');   % 取数
+out = fullfile(base,'figs');   % 出图
+```
+
+这样任何一份交付目录拷走后都能独立重跑，也能从图/CSV 反查是哪支脚本生成。
+
+> 历史归档：长后焦 1.4 mm 版（2026-11-21，光阑改位前）的 MATLAB 脚本在
+> `_archive/pre_stopfix_20261122/matlab/`，不再使用；v5/v6/v7 的产物已随版本清理删除。
+
 ## MATLAB MCP 连接异常提示
 
 运行以下命令并保持 PowerShell 窗口打开。脚本监视启动后的新 MATLAB MCP 日志；发现连接超时或拒绝时，会将告警写入 `matlab-mcp/logs/watchdog-alerts.log`，并提示在 VS Code 的 **MCP: List Servers → MATLAB → Restart** 中重启。它只检测和提示，不会自行结束进程或重载 VS Code。

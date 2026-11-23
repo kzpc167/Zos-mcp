@@ -191,9 +191,9 @@ MCP 的 `rendered_fallback` 会把 y 轴压成 0.33~1.05、丢掉视场标注，
 
 ```
 ① get_mtf_curve(max_frequency=240, num_points=10, wave=0)  → 逐视场 T/S + 衍射极限数据
-② 落 CSV：matlab/data/mtf_curve_<项目>.csv（首列 freq_lpmm，其余 f1T,f1S,…,dl；f=0 时全为 1）
-③ MATLAB 出图：matlab/mtf_plot_<项目>.m，实线=T、虚线=S、灰点划=衍射极限、竖虚线标 120 lp/mm
-④ exportgraphics(fig, '…/layouts/MTF.png', 'Resolution', 300)
+② 落 CSV：<项目目录>/data/mtf_curve_<日期>.csv（首列 freq_lpmm，其余 f1T,f1S,…,dl；f=0 时全为 1）
+③ MATLAB 出图：<项目目录>/plot_mtf_<日期>.m（脚本、data/、figs/ 同在该项目目录），实线=T、虚线=S、灰点划=衍射极限、竖虚线标 120 lp/mm
+④ exportgraphics(fig, fullfile(base,'figs','mtf_120.png'), 'Resolution', 300)
 ```
 
 MATLAB MCP（`mcp__matlab__*`）worker 起不来时（`timeout waiting for worker to start`），
